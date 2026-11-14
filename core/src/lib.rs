@@ -1,12 +1,12 @@
 //! HGhub 业务核心层（Rust → OHOS NAPI）。
 //!
-//! 阶段 0：仅验证 Rust → NAPI → ArkTS 全链路。
-//! 阶段 1 起平移旧工程 src-tauri/src/ 下的 net / dx150 / media / session / download / mux 模块。
+//! 模块结构与旧工程 src-tauri/src/ 一一对应：
+//! - net / dx150 / session：逐字平移（crate::net 内部引用路径不变）
+//! - api：业务命令层（去掉 tauri State，改为全局单例）
+//! - napi_mod：NAPI 接口层（JSON 信封字符串返回）
 
-use napi_derive_ohos::napi;
-
-/// 链路自检：能被 ArkTS 调到即代表 NAPI 桥接成功。
-#[napi]
-pub fn hello() -> String {
-    format!("hg-core {} ready (rust on ohos)", env!("CARGO_PKG_VERSION"))
-}
+pub mod api;
+pub mod dx150;
+pub mod napi_mod;
+pub mod net;
+pub mod session;

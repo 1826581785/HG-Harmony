@@ -1,11 +1,21 @@
 # Rust → OHOS 交叉编译配置
 # NDK 取自 DevEco Studio 自带 SDK（API 24 / 6.1.1），与工程 targetSdkVersion 一致。
+# 本文件被提交进仓库，路径为本机绝对路径；换机器需同步修改。
+
 [target.aarch64-unknown-linux-ohos]
-linker = "D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/native/llvm/bin/clang.exe"
-ar = "D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/native/llvm/bin/llvm-ar.exe"
+linker = "D:/ohos-ndk/native/llvm/bin/clang.exe"
+ar = "D:/ohos-ndk/native/llvm/bin/llvm-ar.exe"
 rustflags = [
     "-C", "link-arg=--target=aarch64-linux-ohos",
-    "-C", "link-arg=--sysroot=D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/native/sysroot",
-    "-C", "link-arg=-L=D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/native/sysroot/usr/lib/aarch64-linux-ohos",
+    "-C", "link-arg=--sysroot=D:/ohos-ndk/native/sysroot",
+    "-C", "link-arg=-L=D:/ohos-ndk/native/sysroot/usr/lib/aarch64-linux-ohos",
     "-C", "link-arg=-lace_napi.z",
 ]
+
+# ring 等含 C/汇编的依赖经 cc crate 编译时使用 NDK clang
+[env]
+CC_aarch64_unknown_linux_ohos = "D:/ohos-ndk/native/llvm/bin/clang.exe"
+CXX_aarch64_unknown_linux_ohos = "D:/ohos-ndk/native/llvm/bin/clang++.exe"
+AR_aarch64_unknown_linux_ohos = "D:/ohos-ndk/native/llvm/bin/llvm-ar.exe"
+CFLAGS_aarch64_unknown_linux_ohos = "--target=aarch64-linux-ohos --sysroot=D:/ohos-ndk/native/sysroot"
+CXXFLAGS_aarch64_unknown_linux_ohos = "--target=aarch64-linux-ohos --sysroot=D:/ohos-ndk/native/sysroot"
