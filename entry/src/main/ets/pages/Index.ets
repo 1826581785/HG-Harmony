@@ -1,7 +1,9 @@
+import { hello } from 'libhg.so';
+
 @Entry
 @Component
 struct Index {
-  @State message: string = 'Hello World';
+  @State message: string = hello();
 
   build() {
     RelativeContainer() {
@@ -14,7 +16,7 @@ struct Index {
           middle: { anchor: '__container__', align: HorizontalAlign.Center }
         })
         .onClick(() => {
-          this.message = 'Welcome';
+          this.message = 'Rust → NAPI → ArkTS 链路 OK';
         })
     }
     .height('100%')

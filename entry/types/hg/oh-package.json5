@@ -1,0 +1,6 @@
+{
+  "name": "hg",
+  "version": "0.1.0",
+  "description": "Type definitions for libhg.so (Rust NAPI)",
+  "main": "index.d.ts"
+}

@@ -1,0 +1,21 @@
+[package]
+name = "hg"
+version = "0.1.0"
+edition = "2021"
+description = "HGhub 业务核心层（dx150 协议 / 媒体代理 / 下载引擎），NAPI 暴露给 ArkTS"
+
+[lib]
+name = "hg"
+crate-type = ["cdylib"]
+
+[dependencies]
+napi-ohos = "1.2"
+napi-derive-ohos = "1.2"
+
+[build-dependencies]
+napi-build-ohos = "1.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
