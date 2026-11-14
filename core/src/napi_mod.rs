@@ -174,7 +174,7 @@ pub async fn hg_media_selftest() -> String {
 
     // 经本地服务取播放列表
     let local = crate::media::proxy_url(&base, &video_url);
-    match crate::net::CLIENT.get(&local).send().await {
+    match crate::net::client().get(&local).send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let text = resp.text().await.unwrap_or_default();
@@ -183,7 +183,7 @@ pub async fn hg_media_selftest() -> String {
             // 取第一个分片（或 AES key）验证透传
             let seg_line = text.lines().find(|l| !l.starts_with('#') && l.contains("/seg?u="));
             match seg_line {
-                Some(seg) => match crate::net::CLIENT.get(seg.trim()).send().await {
+                Some(seg) => match crate::net::client().get(seg.trim()).send().await {
                     Ok(r2) => {
                         let s2 = r2.status().as_u16();
                         let n2 = r2.bytes().await.map(|b| b.len()).unwrap_or(0);
@@ -205,4 +205,26 @@ pub async fn hg_media_selftest() -> String {
 pub fn hg_clear_media_cache() -> String {
     crate::media::clear_caches();
     envelope(Ok(json!({ "ok": true })))
+}
+
+/* ───────────────────────── 代理设置 ───────────────────────── */
+
+/// 设置出网代理（http://host:port 或 socks5://host:port），空串恢复直连。
+/// 持久化到 session.json，重启后自动恢复。
+#[napi]
+pub fn hg_set_proxy(addr: String) -> String {
+    let a = addr.trim().to_string();
+    if a.is_empty() {
+        crate::net::set_proxy(None);
+        api().session.set_proxy(String::new());
+    } else {
+        crate::net::set_proxy(Some(&a));
+        api().session.set_proxy(a.clone());
+    }
+    envelope(Ok(json!({ "proxy": a })))
+}
+
+#[napi]
+pub fn hg_get_proxy() -> String {
+    api().session.proxy()
 }

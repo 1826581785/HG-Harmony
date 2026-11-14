@@ -19,17 +19,37 @@ pub const BASE: &str = "https://huangguoai.com";
 pub const UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-pub static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
+/// 构建客户端；proxy 形如 http://host:port 或 socks5://host:port，None 为直连。
+fn build_client(proxy: Option<&str>) -> reqwest::Client {
+    let mut b = reqwest::Client::builder()
         .user_agent(UA)
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(10))
         .gzip(true)
         .brotli(true)
-        .pool_idle_timeout(Duration::from_secs(60))
-        .build()
-        .expect("build http client")
-});
+        .pool_idle_timeout(Duration::from_secs(60));
+    if let Some(addr) = proxy {
+        if let Ok(p) = reqwest::Proxy::all(addr) {
+            b = b.proxy(p);
+        }
+    }
+    b.build().expect("build http client")
+}
+
+static CLIENT_SLOT: Lazy<std::sync::RwLock<reqwest::Client>> =
+    Lazy::new(|| std::sync::RwLock::new(build_client(None)));
+
+/// 当前客户端（reqwest::Client 内部是 Arc，clone 廉价）。
+pub fn client() -> reqwest::Client {
+    CLIENT_SLOT.read().unwrap().clone()
+}
+
+/// 设置/清除全局代理（重建客户端）。对所有出网请求生效：
+/// 业务 API、媒体拉流、下载共用此客户端。
+pub fn set_proxy(addr: Option<&str>) {
+    let mut w = CLIENT_SLOT.write().unwrap();
+    *w = build_client(addr);
+}
 
 /// 各 scope 的加密会话（dx150 Session 内部处理过期重握手）。
 static SESSIONS: Lazy<Mutex<HashMap<String, dx150::Session>>> =
@@ -255,7 +275,7 @@ pub async fn post_json_h(
     body: &Value,
     extra: &[(&str, &str)],
 ) -> Result<(u16, Value), String> {
-    let mut req = CLIENT
+    let mut req = client()
         .post(url)
         .header("Accept", "application/json")
         .header("Referer", format!("{BASE}/"))
@@ -429,7 +449,7 @@ async fn legacy_edge(
         "content_type": ctype,
     });
     let value = with_retry(|| async {
-        let mut req = CLIENT
+        let mut req = client()
             .post(&format!("{BASE}/api/edge/request"))
             .header("Accept", "application/json")
             .header("Referer", format!("{BASE}/"))
@@ -481,7 +501,7 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
     with_retry(|| {
         let url = url.clone();
         async move {
-            let resp = CLIENT
+            let resp = client()
                 .get(&url)
                 .header("Referer", format!("{BASE}/"))
                 .send()

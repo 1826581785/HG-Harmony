@@ -19,6 +19,11 @@ impl Api {
     pub fn bind(&self, dir: &std::path::Path) {
         let _ = std::fs::create_dir_all(dir);
         self.session.bind(dir.to_path_buf());
+        // 恢复已保存的代理设置
+        let proxy = self.session.proxy();
+        if !proxy.is_empty() {
+            crate::net::set_proxy(Some(&proxy));
+        }
     }
 
     fn token(&self) -> Option<String> {

@@ -14,3 +14,5 @@ export const hgPlay: (id: number, ep: number) => Promise<string>;
 export const hgMediaUrl: (url: string) => string;
 export const hgMediaSelftest: () => Promise<string>;
 export const hgClearMediaCache: () => string;
+export const hgSetProxy: (addr: string) => string;
+export const hgGetProxy: () => string;

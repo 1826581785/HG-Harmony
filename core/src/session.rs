@@ -13,6 +13,9 @@ pub struct Session {
     /// 访客设备身份（32 位十六进制），对应官方 visitor_id。
     #[serde(default)]
     pub visitor: String,
+    /// 出网代理地址（http:// 或 socks5://，空为直连）。
+    #[serde(default)]
+    pub proxy: String,
 }
 
 pub struct SessionStore {
@@ -109,6 +112,20 @@ impl SessionStore {
         {
             let mut cur = self.current.lock().unwrap();
             cur.user = user;
+        }
+        self.persist();
+    }
+}
+
+impl SessionStore {
+    pub fn proxy(&self) -> String {
+        self.current.lock().unwrap().proxy.clone()
+    }
+
+    pub fn set_proxy(&self, addr: String) {
+        {
+            let mut cur = self.current.lock().unwrap();
+            cur.proxy = addr;
         }
         self.persist();
     }
