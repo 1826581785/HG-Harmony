@@ -108,3 +108,101 @@ pub async fn hg_selftest() -> String {
     }
     json!({ "ok": steps.iter().all(|s| s["ok"] == json!(true)), "steps": steps }).to_string()
 }
+
+/* ───────────────────────── 媒体（阶段 2） ───────────────────────── */
+
+/// 启动本地媒体服务（127.0.0.1 随机端口），返回 {base}。幂等。
+#[napi]
+pub async fn hg_media_start() -> String {
+    if let Some(b) = crate::server::base_url() {
+        return envelope(Ok(json!({ "base": b })));
+    }
+    tokio::spawn(crate::server::run());
+    for _ in 0..60 {
+        if let Some(b) = crate::server::base_url() {
+            return envelope(Ok(json!({ "base": b })));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    envelope(Err("本地媒体服务启动超时".into()))
+}
+
+/// 取播放地址（含 streams.main → video_url 兼容转换）。
+#[napi]
+pub async fn hg_play(id: i64, ep: i64) -> String {
+    envelope(api().play(id, ep.max(1) as u32).await)
+}
+
+/// 生成经本地代理的媒体地址（需先 hg_media_start）。m3u8 → /hls，其它 → /seg。
+#[napi]
+pub fn hg_media_url(url: String) -> String {
+    match crate::server::base_url() {
+        Some(b) => envelope(Ok(json!({ "url": crate::media::proxy_url(b, &url) }))),
+        None => envelope(Err("媒体服务未启动，请先调用 hg_media_start".into())),
+    }
+}
+
+/// 媒体链路自检：播放地址 → 本地 /hls（校验 #EXTM3U）→ 首个分片（校验可取）。
+#[napi]
+pub async fn hg_media_selftest() -> String {
+    let mut steps: Vec<Value> = Vec::new();
+
+    // 确保服务已启动
+    if crate::server::base_url().is_none() {
+        tokio::spawn(crate::server::run());
+        for _ in 0..60 {
+            if crate::server::base_url().is_some() { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+    let base = match crate::server::base_url() {
+        Some(b) => b.clone(),
+        None => return json!({ "ok": false, "steps": [{ "step": "media_server", "ok": false, "error": "启动超时" }] }).to_string(),
+    };
+    steps.push(json!({ "step": "media_server", "ok": true, "base": base }));
+
+    // 取播放地址
+    let play = match api().play(117, 3).await {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "steps": steps, "error": e }).to_string(),
+    };
+    let video_url = play.get("video_url").and_then(|u| u.as_str()).unwrap_or("").to_string();
+    steps.push(json!({ "step": "play_url", "ok": !video_url.is_empty(), "url_len": video_url.len() }));
+    if video_url.is_empty() {
+        return json!({ "ok": false, "steps": steps }).to_string();
+    }
+
+    // 经本地服务取播放列表
+    let local = crate::media::proxy_url(&base, &video_url);
+    match crate::net::CLIENT.get(&local).send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            let is_m3u8 = text.starts_with("#EXTM3U");
+            steps.push(json!({ "step": "hls_proxy", "ok": status == 200 && is_m3u8, "status": status, "len": text.len() }));
+            // 取第一个分片（或 AES key）验证透传
+            let seg_line = text.lines().find(|l| !l.starts_with('#') && l.contains("/seg?u="));
+            match seg_line {
+                Some(seg) => match crate::net::CLIENT.get(seg.trim()).send().await {
+                    Ok(r2) => {
+                        let s2 = r2.status().as_u16();
+                        let n2 = r2.bytes().await.map(|b| b.len()).unwrap_or(0);
+                        steps.push(json!({ "step": "seg_or_key", "ok": s2 == 200 && n2 > 100, "status": s2, "len": n2 }));
+                    }
+                    Err(e) => steps.push(json!({ "step": "seg_or_key", "ok": false, "error": e.to_string() })),
+                },
+                None => steps.push(json!({ "step": "seg_or_key", "ok": false, "error": "改写后的列表里没有分片行" })),
+            }
+        }
+        Err(e) => steps.push(json!({ "step": "hls_proxy", "ok": false, "error": e.to_string() })),
+    }
+
+    json!({ "ok": steps.iter().all(|s| s["ok"] == json!(true)), "steps": steps }).to_string()
+}
+
+/// 清空媒体内存缓存（对应旧 cache_clear 的媒体部分）。
+#[napi]
+pub fn hg_clear_media_cache() -> String {
+    crate::media::clear_caches();
+    envelope(Ok(json!({ "ok": true })))
+}

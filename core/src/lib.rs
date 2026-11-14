@@ -7,6 +7,8 @@
 
 pub mod api;
 pub mod dx150;
+pub mod media;
 pub mod napi_mod;
 pub mod net;
+pub mod server;
 pub mod session;
