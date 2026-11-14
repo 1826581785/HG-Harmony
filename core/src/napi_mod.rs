@@ -37,6 +37,12 @@ pub fn hg_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// 链路自检：能被 ArkTS 调到即代表 NAPI 桥接成功。
+#[napi]
+pub fn hello() -> String {
+    format!("hg-core {} ready (rust on ohos)", env!("CARGO_PKG_VERSION"))
+}
+
 #[napi]
 pub async fn hg_boot() -> String {
     envelope(api().boot().await)
