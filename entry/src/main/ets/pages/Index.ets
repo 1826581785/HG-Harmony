@@ -119,6 +119,7 @@ struct Index {
         Text(`hg-core ${hgVersion()} (rust on ohos)`)
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
+          .fontColor('#e8eaf0')
           .alignSelf(ItemAlign.Center)
 
         XComponent({ id: 'player', type: 'surface', controller: this.xcController })
@@ -130,8 +131,9 @@ struct Index {
           })
 
         Text(this.playMsg)
-          .fontSize(12)
+          .fontSize(13)
           .fontFamily('monospace')
+          .fontColor('#d8dee9')
 
         Button('播放测试（AVPlayer）')
           .width(220)
@@ -140,7 +142,7 @@ struct Index {
             this.runPlay();
           })
 
-        Divider().strokeWidth(1).color('#223')
+        Divider().strokeWidth(1).color('#39435a')
 
         Button('媒体自检（本地服务）')
           .width(220)
@@ -149,10 +151,11 @@ struct Index {
             this.runMedia();
           })
         Text(this.mediaTest)
-          .fontSize(12)
+          .fontSize(13)
           .fontFamily('monospace')
+          .fontColor('#a8b6cc')
 
-        Divider().strokeWidth(1).color('#223')
+        Divider().strokeWidth(1).color('#39435a')
 
         Button('协议自检（dx150）')
           .width(220)
@@ -161,8 +164,9 @@ struct Index {
             this.runProto();
           })
         Text(this.protoTest)
-          .fontSize(12)
+          .fontSize(13)
           .fontFamily('monospace')
+          .fontColor('#a8b6cc')
       }
       .padding(16)
       .width('100%')
