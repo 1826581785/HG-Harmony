@@ -63,6 +63,8 @@ export struct HomeFeed {
   @State lockHint: boolean = false;
   /** 全屏倍速循环档下标 */
   @State speedIdx: number = 0;
+  /** 切集/连播加载中（新流出画面即消失） */
+  @State epLoading: boolean = false;
   /** 评论面板 */
   @State cmItems: Comment[] = [];
   @State cmPage: number = 1;
@@ -112,6 +114,7 @@ export struct HomeFeed {
       }
       this.paused = false;
       this.playStateMsg = '';
+      this.epLoading = false;
     };
     // 双保险：prepared 也摘封面（防 onPlaying 被状态校验丢弃导致封面卡死）
     playerService.onPrepared = () => {
@@ -140,6 +143,7 @@ export struct HomeFeed {
     };
     playerService.onError = (msg: string) => {
       this.playStateMsg = msg;
+      this.epLoading = false;
     };
     this.initFeed();
   }
@@ -290,6 +294,7 @@ export struct HomeFeed {
     if (!card) {
       return;
     }
+    this.epLoading = true;
     this.epMap.set(card.id, ep);
     this.curEp = ep;
     this.curMs = 0;
@@ -310,6 +315,7 @@ export struct HomeFeed {
         url = await playUrl(card.id, ep);
         this.urlCache.set(key, url);
       } catch (e) {
+        this.epLoading = false;
         if (gen === this.loadGen) {
           this.errMsg = (e as Error).message;
         }
@@ -317,11 +323,13 @@ export struct HomeFeed {
       }
     }
     if (gen !== this.loadGen) {
+      this.epLoading = false;
       return;
     }
     this.errMsg = '';
     const sid = this.surfaces.get(card.id) ?? '';
     if (sid === '') {
+      this.epLoading = false;
       return;
     }
     playerService.setMuted(this.muted);
@@ -601,60 +609,79 @@ export struct HomeFeed {
   }
 
   @Builder
-  episodesSheet() {
-    Column() {
-      Row({ space: 8 }) {
-        Text('选集')
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#e8eaf0')
-        Text(`共 ${this.curDetail ? this.curDetail.episodes.length : 0} 集`)
-          .fontSize(11)
-          .fontColor('#8fa3c0')
-        Blank()
+  sheetHeader(title: string, count: string) {
+    Row({ space: 8 }) {
+      Text(title)
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#e8eaf0')
+      Text(count)
+        .fontSize(11)
+        .fontColor('#8fa3c0')
+        .backgroundColor('#262a33')
+        .borderRadius(10)
+        .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+      Blank()
+      if (this.sheetKind === 'ep') {
         Text(this.epAsc ? '倒序' : '正序')
           .fontSize(12)
+          .fontWeight(FontWeight.Medium)
           .fontColor('#ff4d6a')
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor('rgba(255,77,106,0.12)')
+          .borderRadius(14)
+          .padding({ left: 12, right: 12, top: 5, bottom: 5 })
           .onClick(() => {
             this.epAsc = !this.epAsc;
           })
-        Text('✕')
-          .fontSize(14)
-          .fontColor('#8fa3c0')
-          .padding({ left: 8, top: 4, bottom: 4 })
-          .onClick(() => {
-            this.showSheet = false;
-          })
       }
-      .width('100%')
-      .height(46)
-      .padding({ left: 16, right: 12 })
-      .alignItems(VerticalAlign.Center)
+      Text('✕')
+        .fontSize(12)
+        .fontColor('#c3cad6')
+        .textAlign(TextAlign.Center)
+        .width(30)
+        .height(30)
+        .backgroundColor('#262a33')
+        .borderRadius(15)
+        .onClick(() => {
+          this.showSheet = false;
+        })
+    }
+    .width('100%')
+    .height(56)
+    .padding({ left: 16, right: 16 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  episodesSheet() {
+    Column() {
+      this.sheetHeader('选集', `共 ${this.curDetail ? this.curDetail.episodes.length : 0} 集`)
 
       if (this.curDetail && this.curDetail.episodes.length > 0) {
         Grid() {
           ForEach(this.epList(), (ep: number) => {
             GridItem() {
               Text(`${ep}`)
-                .fontSize(12.5)
+                .fontSize(13)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(ep === this.curEp ? '#ffffff' : '#c3cad6')
                 .backgroundColor(ep === this.curEp ? '#ff4d6a' : '#262a33')
-                .borderRadius(8)
+                .borderRadius(10)
                 .textAlign(TextAlign.Center)
+                .width('100%')
                 .height(40)
                 .onClick(() => {
                   this.switchEp(ep);
                   this.showSheet = false;
                 })
             }
+            .height(40)
           }, (ep: number) => `${ep}`)
         }
         .columnsTemplate('1fr 1fr 1fr 1fr')
-        .columnsGap(8)
-        .rowsGap(8)
-        .padding({ left: 16, right: 16, bottom: 12 })
+        .columnsGap(10)
+        .rowsGap(10)
+        .padding({ left: 16, right: 16, top: 4, bottom: 16 })
         .layoutWeight(1)
       } else {
         Column() {
@@ -666,6 +693,13 @@ export struct HomeFeed {
         .width('100%')
         .layoutWeight(1)
       }
+
+      Text('点选即切换播放')
+        .fontSize(10.5)
+        .fontColor('#5c6678')
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .padding({ top: 6, bottom: 10 })
     }
     .width('100%')
     .height('100%')
@@ -675,27 +709,7 @@ export struct HomeFeed {
   @Builder
   commentsSheet() {
     Column() {
-      Row({ space: 8 }) {
-        Text('评论')
-          .fontSize(14)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#e8eaf0')
-        Text(`${fmtCount(this.commentCount())} 条`)
-          .fontSize(11)
-          .fontColor('#8fa3c0')
-        Blank()
-        Text('✕')
-          .fontSize(14)
-          .fontColor('#8fa3c0')
-          .padding({ left: 8, top: 4, bottom: 4 })
-          .onClick(() => {
-            this.showSheet = false;
-          })
-      }
-      .width('100%')
-      .height(46)
-      .padding({ left: 16, right: 12 })
-      .alignItems(VerticalAlign.Center)
+      this.sheetHeader('评论', `${fmtCount(this.commentCount())} 条`)
 
       if (this.cmItems.length === 0 && !this.cmLoading) {
         Column() {
@@ -745,10 +759,13 @@ export struct HomeFeed {
           })
         Button() {
           Text('发送')
-            .fontSize(12.5)
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
             .fontColor('#ffffff')
         }
         .height(38)
+        .borderRadius(19)
+        .padding({ left: 18, right: 18 })
         .backgroundColor(this.cmSending ? '#8a3a4e' : '#ff4d6a')
         .onClick(() => {
           this.sendComment();
@@ -901,33 +918,21 @@ export struct HomeFeed {
           .markAnchor({ x: '50%', y: 0 })
       }
 
-      // 顶部：静音 + 搜索（非全屏时）；全屏时：横屏切换（横屏视频）+ 退出
+      // 顶部：静音 + 搜索（非全屏时）；横屏视频可横竖屏来回切换（全屏或已旋转时显示）+ 退出
       Row() {
         Blank()
-        if (!this.fs && this.rotated) {
-          Button() {
-            Text('竖屏')
-              .fontSize(12)
-              .fontColor('#ffffff')
-          }
-          .height(32)
-          .backgroundColor('rgba(0,0,0,0.45)')
-          .onClick(() => {
-            this.rotated = false;
-          })
-        }
-        if (this.fs && this.videoW > this.videoH) {
-          Button() {
-            Text('横屏')
-              .fontSize(12)
-              .fontColor('#ffffff')
-          }
-          .height(32)
-          .backgroundColor('rgba(0,0,0,0.45)')
-          .margin({ right: 8 })
-          .onClick(() => {
-            this.rotated = true;
-          })
+        if (this.isLandscape() && (this.fs || this.rotated)) {
+          Text(this.rotated ? '竖屏' : '横屏')
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#ffffff')
+            .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+            .backgroundColor('rgba(0,0,0,0.5)')
+            .borderRadius(16)
+            .margin({ right: 8 })
+            .onClick(() => {
+              this.rotated = !this.rotated;
+            })
         }
         if (this.fs) {
           Button() {
@@ -1220,6 +1225,25 @@ export struct HomeFeed {
           .markAnchor({ x: '50%', y: '50%' })
       }
 
+      // 切集/连播加载指示
+      if (this.epLoading) {
+        Column({ space: 8 }) {
+          LoadingProgress()
+            .width(32)
+            .height(32)
+            .color('#e8eaf0')
+          Text('切换中…')
+            .fontSize(12)
+            .fontColor('#c3cad6')
+        }
+        .alignItems(HorizontalAlign.Center)
+        .padding({ left: 22, right: 22, top: 16, bottom: 16 })
+        .backgroundColor('rgba(0,0,0,0.45)')
+        .borderRadius(14)
+        .position({ x: '50%', y: '50%' })
+        .markAnchor({ x: '50%', y: '50%' })
+      }
+
       // 加载态
       if (!this.ready && this.errMsg === '') {
         Column({ space: 10 }) {
@@ -1245,9 +1269,7 @@ export struct HomeFeed {
       this.scrH = newArea.height as number;
     })
     // 底部弹层（选集 / 评论共用一个 sheet，内容按 sheetKind 切换）
-    .bindSheet($$this.showSheet, (): void => {
-      this.sheetBody();
-    }, {
+    .bindSheet($$this.showSheet, this.sheetBody(), {
       height: '72%',
       dragBar: true,
       showClose: false,
