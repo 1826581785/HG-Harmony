@@ -500,20 +500,6 @@ export struct HomeFeed {
             })
 
             Column({ space: 3 }) {
-              Image(this.liked ? $r('app.media.ic_heart_f') : $r('app.media.ic_heart'))
-                .width(27)
-                .height(27)
-                .onClick(() => {
-                  this.toggleLike();
-                })
-              Text(fmtCount(this.likeCount()))
-                .fontSize(10.5)
-                .fontColor('#ffffff')
-                .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
-            }
-            .alignItems(HorizontalAlign.Center)
-
-            Column({ space: 3 }) {
               Image($r('app.media.ic_comment_f'))
                 .width(26)
                 .height(26)
@@ -521,20 +507,6 @@ export struct HomeFeed {
                   promptAction.showToast({ message: '评论面板在阶段 4 接入' });
                 })
               Text(fmtCount(this.commentCount()))
-                .fontSize(10.5)
-                .fontColor('#ffffff')
-                .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
-            }
-            .alignItems(HorizontalAlign.Center)
-
-            Column({ space: 3 }) {
-              Image(this.faved ? $r('app.media.ic_star_f') : $r('app.media.ic_star'))
-                .width(26)
-                .height(26)
-                .onClick(() => {
-                  this.toggleFav();
-                })
-              Text(fmtCount(this.collectCount()))
                 .fontSize(10.5)
                 .fontColor('#ffffff')
                 .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
@@ -569,19 +541,6 @@ export struct HomeFeed {
             }
             .alignItems(HorizontalAlign.Center)
 
-            Column({ space: 3 }) {
-              Image($r('app.media.ic_link'))
-                .width(25)
-                .height(25)
-                .onClick(() => {
-                  promptAction.showToast({ message: '分享功能在阶段 4 接入' });
-                })
-              Text('分享')
-                .fontSize(10.5)
-                .fontColor('#ffffff')
-                .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
-            }
-            .alignItems(HorizontalAlign.Center)
           }
           .alignItems(HorizontalAlign.Center)
           .padding({ right: 14, bottom: 96 })
