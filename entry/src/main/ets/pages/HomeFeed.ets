@@ -322,10 +322,16 @@ export struct HomeFeed {
     }
   }
 
-  /** 旋转态组件宽 / 非旋转横屏组件高（按视频宽高比换算） */
-  private rotatedW(): number {
+  /** 非旋转横屏视频的组件高：scrW × (h/w)（宽度铺满屏宽） */
+  private landscapeH(): number {
     const vw = Math.max(1, this.videoW);
     return this.scrW * this.videoH / vw;
+  }
+
+  /** 旋转态组件宽：scrW × (w/h)（旋转后视频长边铺满屏向），超出屏高则截断 */
+  private rotatedW(): number {
+    const vh = Math.max(1, this.videoH);
+    return Math.min(this.scrW * this.videoW / vh, this.scrH);
   }
 
   build() {
@@ -337,7 +343,7 @@ export struct HomeFeed {
             // 视频表面：按视频宽高比定尺寸（横屏不拉伸）；旋转态尺寸对调
             XComponent({ id: `vp_${c.id}`, type: 'surface', controller: this.ctrlFor(c.id) })
               .width(this.rotated ? this.rotatedW() : '100%')
-              .height(this.rotated ? this.scrW : (this.isLandscape() ? this.rotatedW() : '100%'))
+              .height(this.rotated ? this.scrW : (this.isLandscape() ? this.landscapeH() : '100%'))
               .backgroundColor(Color.Black)
               .rotate({ z: 1, angle: this.rotated ? 90 : 0, centerX: '50%', centerY: '50%' })
               .hitTestBehavior(HitTestMode.Transparent)
