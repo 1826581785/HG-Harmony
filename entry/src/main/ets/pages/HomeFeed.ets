@@ -4,7 +4,7 @@
  * 交互：抖音式底部进度条；右侧操作栏；沉浸全屏（横屏视频可旋转 90°）。
  */
 import { VideoCard, VideoDetail, Comment } from '../model';
-import { feed, videoDetail, playUrl, coverUrl, ensureMedia, comments, commentSend } from '../api';
+import { feed, videoDetail, playUrl, coverUrl, ensureMedia, comments, commentSend, likeVideo, collect, followUser } from '../api';
 import { fmtCount, store } from '../store';
 import { playerService } from '../player/PlayerService';
 import { promptAction } from '@kit.ArkUI';
@@ -32,6 +32,10 @@ export struct HomeFeed {
   navStack: NavPathStack = new NavPathStack();
   onOpenSearch: () => void = () => {
   };
+  /** 片单模式：非空则只播这些 id（搜索/榜单/收藏入口），无分页加载 */
+  listIds: number[] = [];
+  /** 片单模式起始下标（点击结果列表的第几条） */
+  startIdx: number = 0;
   @State cards: VideoCard[] = [];
   @State activeIndex: number = 0;
   @State loading: boolean = false;
@@ -79,6 +83,12 @@ export struct HomeFeed {
   @State videoH: number = 0;
   @State scrW: number = 0;
   @State scrH: number = 0;
+  /** 片单模式下的封面（按激活拉详情填充；数组重赋值触发 UI 刷新） */
+  @State listCovers: string[] = [];
+  /** 首页 Tab 是否可见（切走时暂停/不自动起播，回来恢复） */
+  @StorageLink('feedTabVisible') @Watch('onTabVisible') tabVisible: boolean = true;
+  /** 实例已销毁（NavDestination pop 后异步链路必须中止） */
+  private disposed: boolean = false;
   private detailCache: Map<number, VideoDetail> = new Map();
   private urlCache: Map<string, string> = new Map();
   private controllers: Map<number, XComponentController> = new Map();
@@ -95,8 +105,8 @@ export struct HomeFeed {
   private longTimer: number = -1;
   private longArmed: boolean = false;
 
-  aboutToAppear(): void {
-    this.muted = store.muted;
+  /** 绑定播放器事件回调（单槽，attach 前重绑保证活跃流归当前实例） */
+  private bindPlayer(): void {
     playerService.onTime = (ms: number) => {
       this.curMs = ms;
     };
@@ -145,11 +155,66 @@ export struct HomeFeed {
       this.playStateMsg = msg;
       this.epLoading = false;
     };
-    this.initFeed();
+    // 起播闸门：prepared 时刻重新判定可见性/存活，杜绝 attach 与起播之间的竞态
+    playerService.playGate = () => this.canAutoPlay();
+  }
+
+  aboutToAppear(): void {
+    this.muted = store.muted;
+    this.bindPlayer();
+    if (this.listIds.length > 0) {
+      this.initList();
+    } else {
+      this.initFeed();
+    }
+  }
+
+  /** 片单模式：按传入 id 列表构建卡片（点中的那条旋转到第 0 位），无分页 */
+  private async initList(): Promise<void> {
+    try {
+      await ensureMedia();
+      if (this.disposed) {
+        return;
+      }
+      const n = this.listIds.length;
+      const start = Math.min(Math.max(0, this.startIdx), n - 1);
+      this.cards = [];
+      for (let k = 0; k < n; k++) {
+        const c = new VideoCard();
+        c.id = this.listIds[(start + k) % n];
+        this.cards.push(c);
+      }
+      this.listCovers = this.cards.map(() => '');
+      this.ready = true;
+      this.activate(0);
+    } catch (e) {
+      this.errMsg = (e as Error).message;
+    }
+  }
+
+  /** 详情到达后填充片单封面 */
+  private fillCover(i: number, d: VideoDetail): void {
+    if (i < 0 || i >= this.cards.length || this.listCovers[i] !== '' || d.cover === '') {
+      return;
+    }
+    this.listCovers = this.listCovers.slice(0, i).concat([d.cover]).concat(this.listCovers.slice(i + 1));
+  }
+
+  /** 每页封面地址（片单模式从 listCovers 取，普通模式从卡片取） */
+  private pageCover(id: number, i: number): string {
+    if (this.listIds.length > 0) {
+      return (i >= 0 && i < this.listCovers.length) ? this.listCovers[i] : '';
+    }
+    return id === 0 ? '' : (this.cards[i] ? this.cards[i].cover : '');
   }
 
   aboutToDisappear(): void {
+    this.disposed = true;
     this.clearLongTimer();
+    // 片单页退出时清掉全屏标记，避免残留到首页实例
+    if (this.listIds.length > 0 && AppStorage.get<boolean>('feedFs') === true) {
+      AppStorage.set<boolean>('feedFs', false);
+    }
     playerService.release();
   }
 
@@ -157,6 +222,31 @@ export struct HomeFeed {
     if (!this.fs) {
       this.rotated = false;
     }
+  }
+
+  /** 回到首页 Tab：恢复播放（流已就绪则续播，否则重新激活当前卡） */
+  private onTabVisible(): void {
+    if (!this.tabVisible || this.listIds.length > 0 || this.disposed) {
+      return;
+    }
+    if (this.cards.length === 0 || this.activeIndex < 0) {
+      return;
+    }
+    if (playerService.isPlaying() || playerService.switching) {
+      return;
+    }
+    playerService.play();
+  }
+
+  /** 当前是否允许起播：片单页看销毁标记；首页 Tab 还要看可见性 */
+  private canAutoPlay(): boolean {
+    if (this.disposed) {
+      return false;
+    }
+    if (this.listIds.length > 0) {
+      return true;
+    }
+    return AppStorage.get<boolean>('feedTabVisible') !== false;
   }
 
   private ctrlFor(id: number): XComponentController {
@@ -192,7 +282,7 @@ export struct HomeFeed {
   }
 
   async loadPage(p: number): Promise<void> {
-    if (this.loadingMore || this.done) {
+    if (this.listIds.length > 0 || this.loadingMore || this.done) {
       return;
     }
     this.loadingMore = true;
@@ -221,6 +311,7 @@ export struct HomeFeed {
     }
     const gen = ++this.loadGen;
     this.activeIndex = index;
+    this.bindPlayer();
     const card = this.cards[index];
     this.curCard = card;
     this.curEp = this.epMap.get(card.id) ?? 1;
@@ -252,10 +343,15 @@ export struct HomeFeed {
           if (di === this.activeIndex && gen === this.loadGen) {
             this.curDetail = d;
           }
+          this.fillCover(di, d);
         }).catch(() => {
         });
       } else if (di === index) {
-        this.curDetail = this.detailCache.get(cid) ?? null;
+        const d = this.detailCache.get(cid);
+        this.curDetail = d ?? null;
+        if (d) {
+          this.fillCover(di, d);
+        }
       }
     }
     // 播放地址
@@ -275,13 +371,16 @@ export struct HomeFeed {
     if (gen !== this.loadGen) {
       return;
     }
+    if (this.disposed) {
+      return; // 页面已退出，中止挂载链路
+    }
     this.errMsg = '';
     const sid = this.surfaces.get(card.id) ?? '';
     if (sid === '') {
       return; // surface 尚未 onLoad，onPageLoad 会再触发 activate
     }
     playerService.setMuted(this.muted);
-    playerService.attach(url, sid);
+    playerService.attach(url, sid, this.canAutoPlay());
     store.addHistory(card.id);
     if (index >= this.cards.length - 3) {
       this.loadPage(this.page + 1);
@@ -308,6 +407,7 @@ export struct HomeFeed {
     this.speedIdx = 0;
     playerService.setSpeed(media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
     const gen = ++this.loadGen;
+    this.bindPlayer();
     const key = `${card.id}:${ep}`;
     let url = this.urlCache.get(key) ?? '';
     if (url === '') {
@@ -326,6 +426,10 @@ export struct HomeFeed {
       this.epLoading = false;
       return;
     }
+    if (this.disposed) {
+      this.epLoading = false;
+      return;
+    }
     this.errMsg = '';
     const sid = this.surfaces.get(card.id) ?? '';
     if (sid === '') {
@@ -333,7 +437,7 @@ export struct HomeFeed {
       return;
     }
     playerService.setMuted(this.muted);
-    playerService.attach(url, sid);
+    playerService.attach(url, sid, this.canAutoPlay());
   }
 
   /* ── 长按 2x 倍速 ── */
@@ -519,6 +623,10 @@ export struct HomeFeed {
       return;
     }
     this.liked = await store.toggleLike(this.curCard.id);
+    if (store.loggedIn()) {
+      likeVideo(this.curCard.id, this.curEp, this.liked).catch(() => {
+      });
+    }
     promptAction.showToast({ message: this.liked ? '已加入喜欢' : '已取消喜欢' });
   }
 
@@ -527,6 +635,10 @@ export struct HomeFeed {
       return;
     }
     this.faved = await store.toggleFav(this.curCard.id);
+    if (store.loggedIn()) {
+      collect(this.curCard.id, this.faved).catch(() => {
+      });
+    }
     promptAction.showToast({ message: this.faved ? '已收藏' : '已取消收藏' });
   }
 
@@ -536,6 +648,10 @@ export struct HomeFeed {
       return;
     }
     this.followed = await store.toggleFollow(uid);
+    if (store.loggedIn()) {
+      followUser(uid, this.followed).catch(() => {
+      });
+    }
     promptAction.showToast({ message: this.followed ? '已关注' : '已取消关注' });
   }
 
@@ -855,8 +971,8 @@ export struct HomeFeed {
               .onLoad(() => {
                 this.onPageLoad(c.id);
               })
-            if (!this.playingIds.includes(c.id)) {
-              Image(coverUrl(c.cover))
+            if (!this.playingIds.includes(c.id) && this.pageCover(c.id, i) !== '') {
+              Image(coverUrl(this.pageCover(c.id, i)))
                 .width('100%')
                 .height('100%')
                 .objectFit(ImageFit.Cover)
@@ -918,8 +1034,26 @@ export struct HomeFeed {
           .markAnchor({ x: '50%', y: 0 })
       }
 
-      // 顶部：静音 + 搜索（非全屏时）；横屏视频可横竖屏来回切换（全屏或已旋转时显示）+ 退出
-      Row() {
+      // 顶部：返回（片单模式）+ 横竖屏切换 + 静音/搜索（非全屏）+ 退出
+      Row({ space: 8 }) {
+        if (this.listIds.length > 0) {
+          Button() {
+            Image($r('app.media.ic_back'))
+              .width(18)
+              .height(18)
+          }
+          .type(ButtonType.Circle)
+          .width(36)
+          .height(36)
+          .backgroundColor('rgba(0,0,0,0.4)')
+          .onClick(() => {
+            if (this.fs) {
+              this.fs = false;
+            } else {
+              this.navStack.pop();
+            }
+          })
+        }
         Blank()
         if (this.isLandscape() && (this.fs || this.rotated)) {
           Text(this.rotated ? '竖屏' : '横屏')
@@ -1022,6 +1156,20 @@ export struct HomeFeed {
               Text(fmtCount(this.commentCount()))
                 .fontSize(10.5)
                 .fontColor('#ffffff')
+                .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+            }
+            .alignItems(HorizontalAlign.Center)
+
+            Column({ space: 3 }) {
+              Image(this.faved ? $r('app.media.ic_star_f') : $r('app.media.ic_star'))
+                .width(25)
+                .height(25)
+                .onClick(() => {
+                  this.toggleFav();
+                })
+              Text(fmtCount(this.collectCount()))
+                .fontSize(10.5)
+                .fontColor(this.faved ? '#ffb84d' : '#ffffff')
                 .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
             }
             .alignItems(HorizontalAlign.Center)

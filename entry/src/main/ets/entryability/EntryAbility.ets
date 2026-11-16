@@ -1,6 +1,8 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { hgInit } from 'libhg.so';
+import { store } from '../store';
 
 const DOMAIN = 0x0000;
 
@@ -11,6 +13,16 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
+    // 绑定 Rust 会话/数据目录（session.json 持久化 token），必须在任何业务调用前
+    try {
+      hgInit(this.context.filesDir);
+    } catch (err) {
+      hilog.error(DOMAIN, 'testTag', 'hgInit failed: %{public}s', JSON.stringify(err));
+    }
+    // 本地数据（喜欢/收藏/历史/静音/音量/搜索历史）preferences 持久化，必须在页面构建前启动加载
+    store.init(this.context).catch((err: Error) => {
+      hilog.error(DOMAIN, 'testTag', 'store.init failed: %{public}s', err.message);
+    });
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
   }
 

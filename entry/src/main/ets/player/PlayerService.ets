@@ -38,6 +38,12 @@ export class PlayerService {
   private lastVideoH: number = 0;
   /** 最近一次状态回调记录的状态名（applyScale 的状态闸门） */
   private stateName: string = 'idle';
+  /** 本次流 prepared 后是否自动播放（页面不可见时置 false，停在 paused） */
+  private autoPlay: boolean = true;
+  /** 起播闸门：prepared 时刻动态判定（由活跃 UI 实例注入；null 时用 autoPlay） */
+  playGate: (() => boolean) | null = null;
+  /** prepared 后被闸门拦下未起播（看门狗把这种 prepared 视为成功稳态） */
+  private preparedIdle: boolean = false;
 
   /** 缩放策略：竖屏视频 cover 裁剪填充，横屏视频 contain。
    *  仅在合法状态执行（否则 AVPlayer 抛 5400102）；失败静默，不闪错误。 */
@@ -99,7 +105,16 @@ export class PlayerService {
             this.applySpeed();
             this.onDuration(p.duration);
             this.onPrepared();
-            await p.play();
+            const wantPlay = this.playGate ? this.playGate() : this.autoPlay;
+            if (wantPlay) {
+              this.preparedIdle = false;
+              await p.play();
+            } else {
+              // 页面不可见：停在 prepared（prepared 态调 pause 是非法操作会抛错），
+              // 恢复可见时由 play() 从 prepared 直接起播。
+              this.preparedIdle = true;
+              this.switching = false;
+            }
           }
         } catch (e) {
           this.switching = false;
@@ -132,9 +147,11 @@ export class PlayerService {
     });
   }
 
-  /** 切换到新流（同 surface），自动播放。 */
-  async attach(url: string, surfaceId: string): Promise<void> {
+  /** 切换到新流（同 surface）。autoplay=false 时 prepared 后停在 paused（页面不可见场景）。 */
+  async attach(url: string, surfaceId: string, autoplay: boolean = true): Promise<void> {
     const gen = ++this.generation;
+    this.autoPlay = autoplay;
+    this.preparedIdle = false;
     this.surfaceId = surfaceId;
     this.targetUrl = url;
     this.switching = true;
@@ -204,7 +221,8 @@ export class PlayerService {
       if (gen !== this.generation || this.urlGen !== gen) {
         return;
       }
-      const ok = this.stateName === 'playing' || this.stateName === 'paused';
+      const ok = this.stateName === 'playing' || this.stateName === 'paused'
+        || (this.stateName === 'prepared' && this.preparedIdle);
       if (ok) {
         return;
       }

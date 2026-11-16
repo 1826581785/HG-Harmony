@@ -3,6 +3,7 @@
  * 对应旧工程 store.tsx 的 Persist 部分。
  */
 import { preferences } from '@kit.ArkData';
+import { User } from './model';
 
 const PREF_NAME = 'hgapp';
 const KEY_DATA = 'app_data_v1';
@@ -35,6 +36,8 @@ class Store {
   muted: boolean = true;
   volume: number = 0.7;
   searchHist: string[] = [];
+  /** 当前登录用户（token 在 Rust session.json，重启由 boot 恢复） */
+  user: User | null = null;
   /** 简单事件通知（组件订阅后刷新 UI） */
   onUpdate: (() => void) | null = null;
 
@@ -79,9 +82,16 @@ class Store {
     }
   }
 
-  /** 是否已登录（token 在阶段 5 登录模块接入，此前恒为 false） */
+  /** 是否已登录（以 store.user 为准，由 boot/登录流程维护） */
   loggedIn(): boolean {
-    return false;
+    return this.user !== null;
+  }
+
+  setUser(u: User | null): void {
+    this.user = u;
+    if (this.onUpdate) {
+      this.onUpdate();
+    }
   }
 
   isLiked(id: number): boolean {
@@ -108,6 +118,27 @@ class Store {
 
   isFollowed(uid: number): boolean {
     return this.follows.includes(uid);
+  }
+
+  /** 服务端互动列表并入本地标记（取并集，本地独有项保留） */
+  async applyServerInteractions(likeIds: number[], favIds: number[], followIds: number[]): Promise<void> {
+    let changed = false;
+    const merge = (local: number[], server: number[]): number[] => {
+      const out = local.slice();
+      for (const id of server) {
+        if (!out.includes(id)) {
+          out.push(id);
+          changed = true;
+        }
+      }
+      return out;
+    };
+    this.likes = merge(this.likes, likeIds);
+    this.favs = merge(this.favs, favIds);
+    this.follows = merge(this.follows, followIds);
+    if (changed) {
+      await this.persist();
+    }
   }
 
   async toggleFollow(uid: number): Promise<boolean> {
@@ -150,6 +181,16 @@ class Store {
   }
 
   async clearSearchHist(): Promise<void> {
+    this.searchHist = [];
+    await this.persist();
+  }
+
+  /** 清理本地记录（喜欢/收藏/关注/历史/搜索历史），登录态保留 */
+  async clearLocal(): Promise<void> {
+    this.likes = [];
+    this.favs = [];
+    this.follows = [];
+    this.history = [];
     this.searchHist = [];
     await this.persist();
   }

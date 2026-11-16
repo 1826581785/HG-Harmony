@@ -1,14 +1,32 @@
 /**
  * 主页：Navigation（页面栈）+ 底部 4 Tab（首页/搜索/分类/我的）。
  * 对应旧工程 App.tsx 的 AppBody + TabBar。
+ * 页面栈：feedview 片单播放 / ranks 排行榜 / channel 频道详情 / posts 吃瓜列表 / post 吃瓜详情。
  */
 import { HomeFeed } from './HomeFeed';
+import { SearchTab } from './SearchTab';
+import { CategoryTab, ChannelPage } from './CategoryTab';
+import { ProfileTab, FavListPage } from './ProfileTab';
+import { RankPage } from './RankPage';
+import { PostsPage, PostDetailPage } from './PostsTab';
+import { FeedPage } from './FeedView';
+import { boot } from '../api';
+import { store } from '../store';
+import { playerService } from '../player/PlayerService';
 
 @Entry
 @Component
 struct Main {
   @State curTab: number = 0;
   @State navStack: NavPathStack = new NavPathStack();
+
+  aboutToAppear(): void {
+    // 恢复登录态（token 在 Rust session.json，重启后 boot 返回 user）
+    boot().then((u) => {
+      store.setUser(u);
+    }).catch(() => {
+    });
+  }
 
   /** 返回键：沉浸全屏 → 页面栈 → 回首页 Tab → 退出 */
   onBackPress(): boolean {
@@ -28,19 +46,20 @@ struct Main {
   }
 
   @Builder
-  placeholderTab(title: string) {
-    Column({ space: 8 }) {
-      Text(title)
-        .fontSize(22)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#e8eaf0')
-      Text('阶段 5 实现')
-        .fontSize(12)
-        .fontColor('#5a6478')
+  pageMap(name: string) {
+    if (name === 'feedview') {
+      FeedPage({ navStack: this.navStack })
+    } else if (name === 'ranks') {
+      RankPage({ navStack: this.navStack })
+    } else if (name === 'channel') {
+      ChannelPage({ navStack: this.navStack })
+    } else if (name === 'posts') {
+      PostsPage({ navStack: this.navStack })
+    } else if (name === 'post') {
+      PostDetailPage({ navStack: this.navStack })
+    } else if (name === 'favlist') {
+      FavListPage({ navStack: this.navStack })
     }
-    .width('100%')
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
   }
 
   build() {
@@ -57,17 +76,30 @@ struct Main {
         .tabBar(this.tabItem('首页', 0))
 
         TabContent() {
-          this.placeholderTab('搜索')
+          SearchTab({
+            navStack: this.navStack,
+            onOpenRanks: () => {
+              this.navStack.pushPathByName('ranks', '');
+            }
+          })
         }
         .tabBar(this.tabItem('搜索', 1))
 
         TabContent() {
-          this.placeholderTab('分类')
+          CategoryTab({
+            navStack: this.navStack,
+            onOpenRanks: () => {
+              this.navStack.pushPathByName('ranks', '');
+            },
+            onOpenPosts: () => {
+              this.navStack.pushPathByName('posts', '');
+            }
+          })
         }
         .tabBar(this.tabItem('分类', 2))
 
         TabContent() {
-          this.placeholderTab('我的')
+          ProfileTab({ navStack: this.navStack })
         }
         .tabBar(this.tabItem('我的', 3))
       }
@@ -77,12 +109,18 @@ struct Main {
       .width('100%')
       .height('100%')
       .onChange((i: number) => {
+        // 离开首页时暂停播放流（片单页/详情页需要独占播放器）；回来后由 HomeFeed 恢复
+        AppStorage.setOrCreate('feedTabVisible', i === 0);
+        if (i !== 0) {
+          playerService.pause();
+        }
         this.curTab = i;
       })
     }
     .mode(NavigationMode.Stack)
     .hideTitleBar(true)
     .hideToolBar(true)
+    .navDestination(this.pageMap)
     .width('100%')
     .height('100%')
     .backgroundColor('#0b0e15')
