@@ -43,7 +43,12 @@ struct Main {
     Navigation(this.navStack) {
       Tabs({ index: this.curTab, barPosition: BarPosition.End }) {
         TabContent() {
-          HomeFeed({ navStack: this.navStack })
+          HomeFeed({
+            navStack: this.navStack,
+            onOpenSearch: () => {
+              this.curTab = 1;
+            }
+          })
         }
         .tabBar(this.tabItem('首页', 0))
 

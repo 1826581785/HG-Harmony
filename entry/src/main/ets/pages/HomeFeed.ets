@@ -13,6 +13,8 @@ import { promptAction } from '@kit.ArkUI';
 @Component
 export struct HomeFeed {
   navStack: NavPathStack = new NavPathStack();
+  onOpenSearch: () => void = () => {
+  };
   @State cards: VideoCard[] = [];
   @State activeIndex: number = 0;
   @State loading: boolean = false;
@@ -24,6 +26,7 @@ export struct HomeFeed {
   @State ready: boolean = false;
   @State liked: boolean = false;
   @State faved: boolean = false;
+  @State followed: boolean = false;
   @State curMs: number = 0;
   @State durMs: number = 0;
   @State dragging: boolean = false;
@@ -118,6 +121,7 @@ export struct HomeFeed {
     this.coverVisible = true;
     this.liked = store.isLiked(card.id);
     this.faved = store.isFav(card.id);
+    this.followed = store.isFollowed(this.authorId());
     // 详情缓存（含邻接预取）
     for (const di of [index, index + 1, index - 1]) {
       if (di < 0 || di >= this.cards.length) {
@@ -187,6 +191,32 @@ export struct HomeFeed {
   private likeCount(): number {
     const base = this.curDetail ? this.curDetail.likeCount : (this.curCard ? this.curCard.likeCount : 0);
     return base + (this.liked ? 1 : 0);
+  }
+
+  private authorId(): number {
+    if (this.curDetail && this.curDetail.authorId > 0) {
+      return this.curDetail.authorId;
+    }
+    return this.curCard ? Math.abs(this.curCard.id) : 0;
+  }
+
+  private avatarChar(): string {
+    const name = this.metaAuthor();
+    return name === '' ? '?' : name.substring(0, 1);
+  }
+
+  private avatarColor(): string {
+    const palette: string[] = ['#4a90d9', '#e056a7', '#3fbf8f', '#d98a3f', '#8f6fd9', '#d9593f'];
+    return palette[Math.abs(this.authorId()) % palette.length];
+  }
+
+  private async toggleFollow(): Promise<void> {
+    const uid = this.authorId();
+    if (uid <= 0) {
+      return;
+    }
+    this.followed = await store.toggleFollow(uid);
+    promptAction.showToast({ message: this.followed ? '已关注' : '已取消关注' });
   }
 
   private commentCount(): number {
@@ -287,81 +317,156 @@ export struct HomeFeed {
           .hitTestBehavior(HitTestMode.Transparent)
       }
 
-      // 顶部：静音 + 搜索
+      // 顶部：静音 + 搜索（与原 Android 端 Home.tsx 一致：右上角两枚圆钮）
       Row() {
         Blank()
-        Button(this.muted ? '静音' : '有声')
-          .height(32)
-          .fontSize(12)
-          .fontColor('#ffffff')
-          .backgroundColor('rgba(0,0,0,0.45)')
-          .onClick(() => {
-            this.muted = !this.muted;
-            store.setMuted(this.muted);
-            playerService.setMuted(this.muted);
-          })
-        Button('搜索')
-          .height(32)
-          .fontSize(12)
-          .fontColor('#ffffff')
-          .margin({ left: 8 })
-          .backgroundColor('rgba(0,0,0,0.45)')
+        Button() {
+          Image(this.muted ? $r('app.media.ic_vol_mute') : $r('app.media.ic_vol'))
+            .width(17)
+            .height(17)
+        }
+        .type(ButtonType.Circle)
+        .width(36)
+        .height(36)
+        .backgroundColor('rgba(0,0,0,0.4)')
+        .onClick(() => {
+          this.muted = !this.muted;
+          store.setMuted(this.muted);
+          playerService.setMuted(this.muted);
+        })
+        Button() {
+          Image($r('app.media.ic_search'))
+            .width(18)
+            .height(18)
+        }
+        .type(ButtonType.Circle)
+        .width(36)
+        .height(36)
+        .margin({ left: 8 })
+        .backgroundColor('rgba(0,0,0,0.4)')
+        .onClick(() => {
+          this.onOpenSearch();
+        })
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 10 })
       .hitTestBehavior(HitTestMode.Transparent)
 
-      // 右侧纵向操作栏
-      Column({ space: 16 }) {
-        Text(this.liked ? '❤️' : '🤍')
-          .fontSize(26)
-          .onClick(() => {
-            this.toggleLike();
-          })
-        Text(fmtCount(this.likeCount()))
-          .fontSize(10.5)
-          .fontColor('#ffffff')
-          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+      // 右侧纵向操作栏（头像+关注 / 点赞 / 评论 / 收藏 / 下载 / 选集 / 分享）
+      Column({ space: 14 }) {
+        // 作者头像 + 关注角标
+        Stack() {
+          Circle({ width: 44, height: 44 })
+            .fill(this.avatarColor())
+          Text(this.avatarChar())
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#ffffff')
+            .position({ x: '50%', y: '50%' })
+            .markAnchor({ x: '50%', y: '50%' })
+          Circle({ width: 18, height: 18 })
+            .fill(this.followed ? '#2a3040' : '#ff4d6a')
+            .position({ x: 33, y: 33 })
+          Image($r('app.media.ic_plus'))
+            .width(10)
+            .height(10)
+            .position({ x: 37, y: 37 })
+        }
+        .width(44)
+        .height(44)
+        .onClick(() => {
+          this.toggleFollow();
+        })
 
-        Text('💬')
-          .fontSize(25)
-          .onClick(() => {
-            promptAction.showToast({ message: '评论功能在阶段 4 接入' });
-          })
-        Text(fmtCount(this.commentCount()))
-          .fontSize(10.5)
-          .fontColor('#ffffff')
-          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        // 点赞
+        Column({ space: 3 }) {
+          Image(this.liked ? $r('app.media.ic_heart_f') : $r('app.media.ic_heart'))
+            .width(27)
+            .height(27)
+            .onClick(() => {
+              this.toggleLike();
+            })
+          Text(fmtCount(this.likeCount()))
+            .fontSize(10.5)
+            .fontColor('#ffffff')
+            .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        }
+        .alignItems(HorizontalAlign.Center)
 
-        Text(this.faved ? '⭐' : '☆')
-          .fontSize(26)
-          .onClick(() => {
-            this.toggleFav();
-          })
-        Text(fmtCount(this.collectCount()))
-          .fontSize(10.5)
-          .fontColor('#ffffff')
-          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        // 评论
+        Column({ space: 3 }) {
+          Image($r('app.media.ic_comment_f'))
+            .width(26)
+            .height(26)
+            .onClick(() => {
+              promptAction.showToast({ message: '评论面板在阶段 4 接入' });
+            })
+          Text(fmtCount(this.commentCount()))
+            .fontSize(10.5)
+            .fontColor('#ffffff')
+            .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        }
+        .alignItems(HorizontalAlign.Center)
 
-        Text('📋')
-          .fontSize(25)
-          .onClick(() => {
-            promptAction.showToast({ message: '选集面板在阶段 4 接入' });
-          })
-        Text('选集')
-          .fontSize(10.5)
-          .fontColor('#ffffff')
-          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        // 收藏
+        Column({ space: 3 }) {
+          Image(this.faved ? $r('app.media.ic_star_f') : $r('app.media.ic_star'))
+            .width(26)
+            .height(26)
+            .onClick(() => {
+              this.toggleFav();
+            })
+          Text(fmtCount(this.collectCount()))
+            .fontSize(10.5)
+            .fontColor('#ffffff')
+            .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        }
+        .alignItems(HorizontalAlign.Center)
 
-        Text('🔗')
-          .fontSize(25)
-          .onClick(() => {
-            promptAction.showToast({ message: '分享功能在阶段 4 接入' });
-          })
-        Text('分享')
-          .fontSize(10.5)
-          .fontColor('#ffffff')
-          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        // 下载
+        Column({ space: 3 }) {
+          Image($r('app.media.ic_download'))
+            .width(26)
+            .height(26)
+            .onClick(() => {
+              promptAction.showToast({ message: '下载引擎在阶段 6 接入' });
+            })
+          Text('下载')
+            .fontSize(10.5)
+            .fontColor('#ffffff')
+            .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        }
+        .alignItems(HorizontalAlign.Center)
+
+        // 选集
+        Column({ space: 3 }) {
+          Image($r('app.media.ic_list'))
+            .width(25)
+            .height(25)
+            .onClick(() => {
+              promptAction.showToast({ message: '选集面板在阶段 4 接入' });
+            })
+          Text('选集')
+            .fontSize(10.5)
+            .fontColor('#ffffff')
+            .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        }
+        .alignItems(HorizontalAlign.Center)
+
+        // 分享
+        Column({ space: 3 }) {
+          Image($r('app.media.ic_link'))
+            .width(25)
+            .height(25)
+            .onClick(() => {
+              promptAction.showToast({ message: '分享功能在阶段 4 接入' });
+            })
+          Text('分享')
+            .fontSize(10.5)
+            .fontColor('#ffffff')
+            .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+        }
+        .alignItems(HorizontalAlign.Center)
       }
       .alignItems(HorizontalAlign.Center)
       .position({ x: '100%', y: '100%' })

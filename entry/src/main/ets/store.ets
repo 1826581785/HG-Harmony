@@ -10,6 +10,7 @@ const KEY_DATA = 'app_data_v1';
 interface PersistData {
   likes: number[];
   favs: number[];
+  follows: number[];
   history: number[];
   muted: boolean;
   volume: number;
@@ -29,6 +30,7 @@ export function fmtCount(n: number): string {
 class Store {
   likes: number[] = [];
   favs: number[] = [];
+  follows: number[] = [];
   history: number[] = [];
   muted: boolean = true;
   volume: number = 0.7;
@@ -46,6 +48,7 @@ class Store {
         const d = JSON.parse(raw) as PersistData;
         this.likes = d.likes ?? [];
         this.favs = d.favs ?? [];
+        this.follows = d.follows ?? [];
         this.history = d.history ?? [];
         this.muted = d.muted ?? true;
         this.volume = d.volume ?? 0.7;
@@ -63,6 +66,7 @@ class Store {
     const d: PersistData = {
       likes: this.likes,
       favs: this.favs,
+      follows: this.follows,
       history: this.history,
       muted: this.muted,
       volume: this.volume,
@@ -93,6 +97,17 @@ class Store {
   async toggleFav(id: number): Promise<boolean> {
     const on = !this.favs.includes(id);
     this.favs = on ? [id].concat(this.favs) : this.favs.filter((x: number) => x !== id);
+    await this.persist();
+    return on;
+  }
+
+  isFollowed(uid: number): boolean {
+    return this.follows.includes(uid);
+  }
+
+  async toggleFollow(uid: number): Promise<boolean> {
+    const on = !this.follows.includes(uid);
+    this.follows = on ? [uid].concat(this.follows) : this.follows.filter((x: number) => x !== uid);
     await this.persist();
     return on;
   }
