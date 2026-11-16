@@ -10,8 +10,12 @@ struct Main {
   @State curTab: number = 0;
   @State navStack: NavPathStack = new NavPathStack();
 
-  /** 返回键：栈交给 Navigation；无栈时回首页 Tab */
+  /** 返回键：沉浸全屏 → 页面栈 → 回首页 Tab → 退出 */
   onBackPress(): boolean {
+    if (AppStorage.get<boolean>('feedFs') === true) {
+      AppStorage.set<boolean>('feedFs', false);
+      return true;
+    }
     if (this.navStack.size() > 0) {
       this.navStack.pop();
       return true;

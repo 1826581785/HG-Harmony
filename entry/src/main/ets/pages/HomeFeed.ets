@@ -33,7 +33,8 @@ export struct HomeFeed {
   @State playingIds: number[] = [];
   @State paused: boolean = false;
   @State playStateMsg: string = '';
-  @State fs: boolean = false;
+  /** 沉浸全屏：放 AppStorage，Main 的 onBackPress 能读到（返回键优先退全屏） */
+  @StorageLink('feedFs') @Watch('onFsChange') fs: boolean = false;
   @State rotated: boolean = false;
   @State videoW: number = 0;
   @State videoH: number = 0;
@@ -84,6 +85,12 @@ export struct HomeFeed {
 
   aboutToDisappear(): void {
     playerService.release();
+  }
+
+  private onFsChange(): void {
+    if (!this.fs) {
+      this.rotated = false;
+    }
   }
 
   private ctrlFor(id: number): XComponentController {
@@ -379,6 +386,7 @@ export struct HomeFeed {
       .loop(false)
       .indicator(false)
       .cachedCount(1)
+      .disableSwipe(this.fs)
       .width('100%')
       .height('100%')
       .onChange((i: number) => {
