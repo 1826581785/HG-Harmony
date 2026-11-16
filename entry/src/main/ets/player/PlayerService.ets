@@ -94,6 +94,10 @@ export class PlayerService {
           await p.prepare();
           const stNow: string = p.state;
           if (stNow === 'prepared') {
+            // 确认仍要播放本流，才摘封面（onPrepared）；若状态已被新流切走则交给新 attach/看门狗
+            this.applyScale();
+            this.onDuration(p.duration);
+            this.onPrepared();
             await p.play();
           }
         } catch (e) {
@@ -106,7 +110,6 @@ export class PlayerService {
         }
         this.applyScale();
         this.onDuration(p.duration);
-        this.onPrepared();
       } else if (state === 'playing') {
         if (stale || p.state !== 'playing') {
           return;
@@ -150,12 +153,39 @@ export class PlayerService {
     if (gen !== this.generation) {
       return; // 已有更新的切流请求
     }
+    // 只有 idle 才允许赋 url（否则 5400102）：并发 attach 交错时可能仍在 initialized，强制归位
+    let st: string = p.state;
+    let guard = 0;
+    while (st !== 'idle' && guard < 3) {
+      try {
+        await p.reset();
+      } catch (e) {
+        break;
+      }
+      if (gen !== this.generation) {
+        return;
+      }
+      st = p.state;
+      guard++;
+    }
+    if (gen !== this.generation) {
+      return;
+    }
+    if (st !== 'idle') {
+      this.scheduleWatchdog(gen, 1);
+      return;
+    }
     this.urlGen = gen;
-    p.url = url;
+    try {
+      p.url = url;
+    } catch (e) {
+      this.scheduleWatchdog(gen, 1);
+      return;
+    }
     this.scheduleWatchdog(gen, 0);
   }
 
-  /** 看门狗：赋 url 后 8s 内没到 prepared → 自动 reset 重来（reset 与初始化偶发竞态会导致初始化不启动且无任何事件） */
+  /** 看门狗：赋 url 后 8s 内没到 playing/paused（真正出画面出声）→ 自动 reset 重来 */
   private watchdogTimer: number = -1;
 
   private clearWatchdog(): void {
@@ -172,7 +202,7 @@ export class PlayerService {
       if (gen !== this.generation || this.urlGen !== gen) {
         return;
       }
-      const ok = this.stateName === 'prepared' || this.stateName === 'playing' || this.stateName === 'paused';
+      const ok = this.stateName === 'playing' || this.stateName === 'paused';
       if (ok) {
         return;
       }
@@ -199,8 +229,19 @@ export class PlayerService {
       return;
     }
     this.stateName = 'idle';
+    let st: string = p.state;
+    if (st !== 'idle') {
+      this.scheduleWatchdog(gen, attempt);
+      return;
+    }
     this.urlGen = gen;
-    p.url = this.targetUrl;
+    try {
+      p.url = this.targetUrl;
+    } catch (e) {
+      this.switching = false;
+      this.onError('播放器启动失败，滑动切换后重试');
+      return;
+    }
     this.scheduleWatchdog(gen, attempt);
   }
 
