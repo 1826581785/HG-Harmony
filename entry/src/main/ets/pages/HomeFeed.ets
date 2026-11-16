@@ -71,6 +71,13 @@ export struct HomeFeed {
       this.paused = false;
       this.playStateMsg = '';
     };
+    // 双保险：prepared 也摘封面（防 onPlaying 被状态校验丢弃导致封面卡死）
+    playerService.onPrepared = () => {
+      const id = this.curCard ? this.curCard.id : 0;
+      if (id > 0 && !this.playingIds.includes(id)) {
+        this.playingIds = this.playingIds.concat([id]);
+      }
+    };
     playerService.onPaused = () => {
       this.paused = true;
     };

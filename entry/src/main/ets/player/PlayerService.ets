@@ -24,6 +24,8 @@ export class PlayerService {
   };
   onPlaying: () => void = () => {
   };
+  onPrepared: () => void = () => {
+  };
   onPaused: () => void = () => {
   };
   onCompleted: () => void = () => {
@@ -104,6 +106,7 @@ export class PlayerService {
         }
         this.applyScale();
         this.onDuration(p.duration);
+        this.onPrepared();
       } else if (state === 'playing') {
         if (stale || p.state !== 'playing') {
           return;
@@ -149,6 +152,56 @@ export class PlayerService {
     }
     this.urlGen = gen;
     p.url = url;
+    this.scheduleWatchdog(gen, 0);
+  }
+
+  /** 看门狗：赋 url 后 8s 内没到 prepared → 自动 reset 重来（reset 与初始化偶发竞态会导致初始化不启动且无任何事件） */
+  private watchdogTimer: number = -1;
+
+  private clearWatchdog(): void {
+    if (this.watchdogTimer >= 0) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = -1;
+    }
+  }
+
+  private scheduleWatchdog(gen: number, attempt: number): void {
+    this.clearWatchdog();
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = -1;
+      if (gen !== this.generation || this.urlGen !== gen) {
+        return;
+      }
+      const ok = this.stateName === 'prepared' || this.stateName === 'playing' || this.stateName === 'paused';
+      if (ok) {
+        return;
+      }
+      if (attempt >= 1) {
+        this.switching = false;
+        this.onError('播放器启动超时，滑动切换后重试');
+        return;
+      }
+      this.rekick(gen, attempt + 1);
+    }, 8000);
+  }
+
+  private async rekick(gen: number, attempt: number): Promise<void> {
+    const p = this.player;
+    if (!p) {
+      return;
+    }
+    try {
+      await p.reset();
+    } catch (e) {
+      return;
+    }
+    if (gen !== this.generation) {
+      return;
+    }
+    this.stateName = 'idle';
+    this.urlGen = gen;
+    p.url = this.targetUrl;
+    this.scheduleWatchdog(gen, attempt);
   }
 
   async play(): Promise<void> {
@@ -204,6 +257,7 @@ export class PlayerService {
 
   async release(): Promise<void> {
     this.generation++;
+    this.clearWatchdog();
     if (this.player) {
       try { await this.player.release(); } catch (e) { /* 忽略 */ }
       this.player = null;
