@@ -18,6 +18,8 @@ export class PlayerService {
   };
   onDuration: (ms: number) => void = () => {
   };
+  onVideoSize: (w: number, h: number) => void = () => {
+  };
   onPlaying: () => void = () => {
   };
   onPaused: () => void = () => {
@@ -33,6 +35,15 @@ export class PlayerService {
     });
     p.on('timeUpdate', (t: number) => {
       this.onTime(t);
+    });
+    p.on('videoSizeChange', (w: number, h: number) => {
+      // 竖屏视频 → cover 裁剪填充；横屏视频 → contain（防拉伸）
+      try {
+        p.videoScaleType = h > w ? media.VideoScaleType.VIDEO_SCALE_TYPE_FIT_CROP : media.VideoScaleType.VIDEO_SCALE_TYPE_FIT;
+      } catch (e) {
+        // 忽略状态不允许时
+      }
+      this.onVideoSize(w, h);
     });
     p.on('stateChange', async (state: string) => {
       if (this.player !== p) {
