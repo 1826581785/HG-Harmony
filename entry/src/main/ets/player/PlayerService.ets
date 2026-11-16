@@ -29,6 +29,25 @@ export class PlayerService {
   onError: (msg: string) => void = () => {
   };
 
+  /** 最近上报的视频尺寸（0 表示未知） */
+  private lastVideoW: number = 0;
+  private lastVideoH: number = 0;
+
+  /** 缩放策略：竖屏视频 cover 裁剪填充，横屏视频 contain。失败不中断播放。 */
+  private applyScale(): void {
+    const p = this.player;
+    if (!p || this.lastVideoW <= 0 || this.lastVideoH <= 0) {
+      return;
+    }
+    try {
+      p.videoScaleType = this.lastVideoH > this.lastVideoW
+        ? media.VideoScaleType.VIDEO_SCALE_TYPE_FIT_CROP
+        : media.VideoScaleType.VIDEO_SCALE_TYPE_FIT;
+    } catch (e) {
+      this.onError(`setScaleType 失败: ${(e as BusinessError).message ?? String(e)}`);
+    }
+  }
+
   private bindEvents(p: media.AVPlayer): void {
     p.on('error', (err: BusinessError) => {
       this.onError(`播放错误(${err.code}): ${err.message}`);
@@ -37,12 +56,9 @@ export class PlayerService {
       this.onTime(t);
     });
     p.on('videoSizeChange', (w: number, h: number) => {
-      // 竖屏视频 → cover 裁剪填充；横屏视频 → contain（防拉伸）
-      try {
-        p.videoScaleType = h > w ? media.VideoScaleType.VIDEO_SCALE_TYPE_FIT_CROP : media.VideoScaleType.VIDEO_SCALE_TYPE_FIT;
-      } catch (e) {
-        // 忽略状态不允许时
-      }
+      this.lastVideoW = w;
+      this.lastVideoH = h;
+      this.applyScale();
       this.onVideoSize(w, h);
     });
     p.on('stateChange', async (state: string) => {
@@ -59,6 +75,7 @@ export class PlayerService {
           this.onError(`prepare/play 异常: ${(e as BusinessError).message ?? String(e)}`);
         }
       } else if (state === 'prepared') {
+        this.applyScale();
         this.onDuration(p.duration);
       } else if (state === 'playing') {
         this.switching = false;

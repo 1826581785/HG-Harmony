@@ -31,6 +31,7 @@ export struct HomeFeed {
   @State dragging: boolean = false;
   @State dragMs: number = 0;
   @State playingIds: number[] = [];
+  @State paused: boolean = false;
   @State playStateMsg: string = '';
   @State fs: boolean = false;
   @State rotated: boolean = false;
@@ -66,9 +67,11 @@ export struct HomeFeed {
       if (id > 0 && !this.playingIds.includes(id)) {
         this.playingIds = this.playingIds.concat([id]);
       }
+      this.paused = false;
       this.playStateMsg = '';
     };
     playerService.onPaused = () => {
+      this.paused = true;
     };
     playerService.onCompleted = () => {
       this.playStateMsg = '播放结束';
@@ -149,6 +152,7 @@ export struct HomeFeed {
     this.curCard = card;
     this.curMs = 0;
     this.durMs = 0;
+    this.paused = false;
     this.playStateMsg = '';
     this.liked = store.isLiked(card.id);
     this.faved = store.isFav(card.id);
@@ -304,15 +308,36 @@ export struct HomeFeed {
     }
   }
 
+  /* ── 播放/暂停 ── */
+
+  private isLandscape(): boolean {
+    return this.videoW > 0 && this.videoH > 0 && this.videoW > this.videoH;
+  }
+
+  private async togglePlay(): Promise<void> {
+    if (playerService.isPlaying()) {
+      await playerService.pause();
+    } else {
+      await playerService.play();
+    }
+  }
+
+  /** 旋转态组件宽 / 非旋转横屏组件高（按视频宽高比换算） */
+  private rotatedW(): number {
+    const vw = Math.max(1, this.videoW);
+    return this.scrW * this.videoH / vw;
+  }
+
   build() {
     Stack() {
-      // 卡片轮播：每页内嵌视频表面（画面随页面滑动）+ 封面遮罩
+      // 卡片轮播：每页内嵌视频表面（画面随页面滑动）+ 封面遮罩 + 单击暂停
       Swiper() {
         ForEach(this.cards, (c: VideoCard, i: number) => {
           Stack() {
+            // 视频表面：按视频宽高比定尺寸（横屏不拉伸）；旋转态尺寸对调
             XComponent({ id: `vp_${c.id}`, type: 'surface', controller: this.ctrlFor(c.id) })
-              .width(this.rotated ? this.scrH : '100%')
-              .height(this.rotated ? this.scrW : '100%')
+              .width(this.rotated ? this.rotatedW() : '100%')
+              .height(this.rotated ? this.scrW : (this.isLandscape() ? this.rotatedW() : '100%'))
               .backgroundColor(Color.Black)
               .rotate({ z: 1, angle: this.rotated ? 90 : 0, centerX: '50%', centerY: '50%' })
               .hitTestBehavior(HitTestMode.Transparent)
@@ -326,9 +351,22 @@ export struct HomeFeed {
                 .objectFit(ImageFit.Cover)
                 .hitTestBehavior(HitTestMode.Transparent)
             }
+            // 暂停时的大播放键（仅当前页）
+            if (this.paused && this.curCard && c.id === this.curCard.id) {
+              Stack() {
+                Circle({ width: 66, height: 66 })
+                  .fill('rgba(0,0,0,0.4)')
+                Image($r('app.media.ic_play_f'))
+                  .width(28)
+                  .height(28)
+              }
+            }
           }
           .width('100%')
           .height('100%')
+          .gesture(TapGesture({ count: 1 }).onAction(() => {
+            this.togglePlay();
+          }))
         }, (c: VideoCard) => `${c.id}`)
       }
       .vertical(true)
@@ -602,11 +640,11 @@ export struct HomeFeed {
           .alignItems(VerticalAlign.Bottom)
         } else {
           Row({ space: 12 }) {
-            Image($r('app.media.ic_play_f'))
+            Image(this.paused ? $r('app.media.ic_play_f') : $r('app.media.ic_pause_f'))
               .width(18)
               .height(18)
               .onClick(() => {
-                playerService.play();
+                this.togglePlay();
               })
             Text(`${this.fmtTime(this.curMs)} / ${this.fmtTime(this.durMs)}`)
               .fontSize(11.5)
