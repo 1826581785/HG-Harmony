@@ -1,186 +1,90 @@
-import { hello, hgVersion, hgInit, hgSelftest, hgMediaStart, hgPlay, hgMediaUrl, hgMediaSelftest } from 'libhg.so';
-import { media } from '@kit.MediaKit';
-import { BusinessError } from '@kit.BasicServicesKit';
-
 /**
- * 阶段 1/2 调试页：dx150 协议链路 + 本地媒体服务 + AVPlayer AES-128 HLS spike。
- * 正式 UI（阶段 3 起）接管后此页退役。
+ * 启动页：白底 Hello World + 四角隐藏点击热区。
+ * 解锁序列：左上 1 下 → 右上 1 下 → 左下 1 下 → 右下 10 下（点错任意角重置进度），
+ * 序列完成后 replaceUrl 进入 Main。对应旧需求「伪装启动页」。
+ * 全局初始化（hgInit/store.init/dl 回调）都在 EntryAbility.onCreate，不依赖本页。
  */
+import { router } from '@kit.ArkUI';
+
+/** 角落热区边长（px），稍微大一点、透明、无点击效果 */
+const HOT = 90;
+
 @Entry
 @Component
 struct Index {
-  @State message: string = hello();
-  @State protoTest: string = '未执行';
-  @State mediaTest: string = '未执行';
-  @State playMsg: string = '未播放';
-  @State running: boolean = false;
-  private surfaceId: string = '';
-  private xcController: XComponentController = new XComponentController();
-  private player: media.AVPlayer | null = null;
+  @State message: string = 'Hello World';
+  /** 当前解锁步骤：0=左上 1=右上 2=左下 3=右下 */
+  private step: number = 0;
+  /** 右下角连击计数 */
+  private brCount: number = 0;
 
-  aboutToAppear(): void {
-    // session.json 等持久化文件落在应用沙箱 filesDir
-    hgInit(getContext(this).filesDir);
-  }
-
-  private fmtSteps(r: Record<string, Object>): string {
-    const lines: string[] = [];
-    const steps = r.steps as Array<Record<string, Object>> ?? [];
-    for (const s of steps) {
-      const ok: boolean = s.ok as boolean;
-      let line = `${ok ? '✓' : '✗'} ${s.step as string}`;
-      if (ok && s.len !== undefined) {
-        line += ` (len ${s.len as number})`;
-      }
-      if (!ok) {
-        line += ` — ${s.error as string ?? JSON.stringify(s)}`;
-      }
-      lines.push(line);
-    }
-    lines.push('', r.ok ? '全部通过' : '存在失败项');
-    return lines.join('\n');
-  }
-
-  private env(raw: string): Record<string, Object> {
-    return JSON.parse(raw) as Record<string, Object>;
-  }
-
-  async runProto(): Promise<void> {
-    this.running = true;
-    this.protoTest = '自检中…';
-    try {
-      this.protoTest = this.fmtSteps(this.env(await hgSelftest()));
-    } catch (e) {
-      this.protoTest = `调用异常: ${(e as BusinessError).message ?? String(e)}`;
-    }
-    this.running = false;
-  }
-
-  async runMedia(): Promise<void> {
-    this.running = true;
-    this.mediaTest = '自检中…';
-    try {
-      this.mediaTest = this.fmtSteps(this.env(await hgMediaSelftest()));
-    } catch (e) {
-      this.mediaTest = `调用异常: ${(e as BusinessError).message ?? String(e)}`;
-    }
-    this.running = false;
-  }
-
-  async runPlay(): Promise<void> {
-    try {
-      const start = this.env(await hgMediaStart());
-      if (start.ok !== true) {
-        this.playMsg = '媒体服务启动失败';
+  private tapCorner(c: string): void {
+    if (this.step === 0 && c === 'tl') {
+      this.step = 1;
+    } else if (this.step === 1 && c === 'tr') {
+      this.step = 2;
+    } else if (this.step === 2 && c === 'bl') {
+      this.step = 3;
+    } else if (this.step === 3 && c === 'br') {
+      this.brCount += 1;
+      if (this.brCount >= 10) {
+        this.step = 0;
+        this.brCount = 0;
+        router.replaceUrl({ url: 'pages/Main' }).catch(() => {
+        });
         return;
       }
-      const playEnv = this.env(await hgPlay(117, 3));
-      if (playEnv.ok !== true) {
-        this.playMsg = `取播放地址失败: ${playEnv.error as string}`;
-        return;
-      }
-      const data = playEnv.data as Record<string, Object>;
-      const videoUrl = data.video_url as string;
-      const urlEnv = this.env(hgMediaUrl(videoUrl));
-      if (urlEnv.ok !== true) {
-        this.playMsg = `代理地址生成失败: ${urlEnv.error as string}`;
-        return;
-      }
-      const localUrl = (urlEnv.data as Record<string, Object>).url as string;
-      this.playMsg = '加载中…';
-
-      if (this.player) {
-        try { await this.player.release(); } catch (e) { /* 忽略 */ }
-        this.player = null;
-      }
-      const p = await media.createAVPlayer();
-      p.on('error', (err: BusinessError) => {
-        this.playMsg = `播放错误(${err.code}): ${err.message}`;
-      });
-      p.on('stateChange', async (state: string) => {
-        if (state === 'initialized') {
-          // initialized 状态下才能绑 surface 并 prepare
-          p.surfaceId = this.surfaceId;
-          try {
-            await p.prepare();
-            await p.play();
-            this.player = p;
-            this.playMsg = '播放中';
-          } catch (e) {
-            this.playMsg = `prepare/play 异常: ${(e as BusinessError).message ?? String(e)}`;
-          }
-        } else if (state === 'completed' || state === 'stopped') {
-          this.playMsg = '播放结束';
-        }
-      });
-      // 赋 url 后 AVPlayer 异步进入 initialized，prepare 由状态回调驱动
-      p.url = localUrl;
-      this.playMsg = '初始化中…';
-    } catch (e) {
-      this.playMsg = `调用异常: ${(e as BusinessError).message ?? String(e)}`;
+      return;
+    } else {
+      // 点错角 → 重置
+      this.step = 0;
+      this.brCount = 0;
+      return;
     }
+  }
+
+  /** 透明热区：无背景无点击态，纯面积触发 */
+  @Builder
+  hot(c: string) {
+    Row()
+      .width(HOT)
+      .height(HOT)
+      .backgroundColor(Color.Transparent)
+      .onClick(() => {
+        this.tapCorner(c);
+      })
   }
 
   build() {
-    Scroll() {
-      Column({ space: 12 }) {
-        Text(`hg-core ${hgVersion()} (rust on ohos)`)
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#e8eaf0')
-          .alignSelf(ItemAlign.Center)
+    Stack() {
+      // 四角热区层（铺满全屏，上下两行夹 Blank）
+      Column() {
+        Row() {
+          this.hot('tl')
+          Blank()
+          this.hot('tr')
+        }
+        .width('100%')
 
-        XComponent({ id: 'player', type: 'surface', controller: this.xcController })
-          .width('100%')
-          .height(220)
-          .backgroundColor('#000000')
-          .onLoad(() => {
-            this.surfaceId = this.xcController.getXComponentSurfaceId();
-          })
+        Blank()
 
-        Text(this.playMsg)
-          .fontSize(13)
-          .fontFamily('monospace')
-          .fontColor('#d8dee9')
-
-        Button('播放测试（AVPlayer）')
-          .width(220)
-          .enabled(!this.running)
-          .onClick(() => {
-            this.runPlay();
-          })
-
-        Divider().strokeWidth(1).color('#39435a')
-
-        Button('媒体自检（本地服务）')
-          .width(220)
-          .enabled(!this.running)
-          .onClick(() => {
-            this.runMedia();
-          })
-        Text(this.mediaTest)
-          .fontSize(13)
-          .fontFamily('monospace')
-          .fontColor('#a8b6cc')
-
-        Divider().strokeWidth(1).color('#39435a')
-
-        Button('协议自检（dx150）')
-          .width(220)
-          .enabled(!this.running)
-          .onClick(() => {
-            this.runProto();
-          })
-        Text(this.protoTest)
-          .fontSize(13)
-          .fontFamily('monospace')
-          .fontColor('#a8b6cc')
+        Row() {
+          this.hot('bl')
+          Blank()
+          this.hot('br')
+        }
+        .width('100%')
       }
-      .padding(16)
       .width('100%')
+      .height('100%')
+
+      Text(this.message)
+        .fontSize(38)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#000000')
     }
-    .height('100%')
     .width('100%')
-    .backgroundColor('#0b0e15')
+    .height('100%')
+    .backgroundColor(Color.White)
   }
 }

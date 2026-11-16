@@ -3,8 +3,8 @@
  * 对应旧工程 Home.tsx + Feed.tsx。
  * 交互：抖音式底部进度条；右侧操作栏；沉浸全屏（横屏视频可旋转 90°）。
  */
-import { VideoCard, VideoDetail, Comment } from '../model';
-import { feed, videoDetail, playUrl, coverUrl, ensureMedia, comments, commentSend, likeVideo, collect, followUser } from '../api';
+import { VideoCard, VideoDetail, Comment, DlTask } from '../model';
+import { feed, videoDetail, playUrl, coverUrl, ensureMedia, comments, commentSend, likeVideo, collect, followUser, dlAdd } from '../api';
 import { fmtCount, store } from '../store';
 import { playerService } from '../player/PlayerService';
 import { promptAction } from '@kit.ArkUI';
@@ -85,6 +85,7 @@ export struct HomeFeed {
   @State scrH: number = 0;
   /** 片单模式下的封面（按激活拉详情填充；数组重赋值触发 UI 刷新） */
   @State listCovers: string[] = [];
+  @StorageLink('dlTasks') dlTasks: DlTask[] = [];
   /** 首页 Tab 是否可见（切走时暂停/不自动起播，回来恢复） */
   @StorageLink('feedTabVisible') @Watch('onTabVisible') tabVisible: boolean = true;
   /** 实例已销毁（NavDestination pop 后异步链路必须中止） */
@@ -573,6 +574,44 @@ export struct HomeFeed {
 
   private metaTitle(): string {
     return (this.curDetail && this.curDetail.title !== '') ? this.curDetail.title : (this.curCard ? this.curCard.title : '');
+  }
+
+  /** 当前集下载状态：idle 可下 / active 下载中（含排队）/ done 已完成 */
+  private dlStateFor(): string {
+    const vid = this.curDetail ? this.curDetail.id : (this.curCard ? this.curCard.id : 0);
+    if (vid === 0) {
+      return 'idle';
+    }
+    for (const t of (this.dlTasks ?? [])) {
+      if (t.video_id === vid && t.ep === this.curEp) {
+        return t.status === 'done' ? 'done' : 'active';
+      }
+    }
+    return 'idle';
+  }
+
+  /** 加入下载（重复任务由 Rust 侧返回 null，前端提示） */
+  private onDownload(): void {
+    const vid = this.curDetail ? this.curDetail.id : (this.curCard ? this.curCard.id : 0);
+    if (vid === 0) {
+      return;
+    }
+    const st = this.dlStateFor();
+    if (st === 'done') {
+      promptAction.showToast({ message: '本集已下载，可在「我的下载」查看' });
+      return;
+    }
+    if (st === 'active') {
+      promptAction.showToast({ message: '本集已在下载列表中' });
+      return;
+    }
+    dlAdd(vid, this.curEp, this.metaTitle(), `第${this.curEp}集`)
+      .then((id: number | null) => {
+        promptAction.showToast({ message: id !== null ? '已加入下载' : '本集已在下载列表中' });
+      })
+      .catch((e: Error) => {
+        promptAction.showToast({ message: e.message });
+      });
   }
 
   private metaAuthor(): string {
@@ -1175,18 +1214,26 @@ export struct HomeFeed {
             .alignItems(HorizontalAlign.Center)
 
             Column({ space: 3 }) {
-              Image($r('app.media.ic_download'))
-                .width(26)
-                .height(26)
-                .onClick(() => {
-                  promptAction.showToast({ message: '下载引擎在阶段 6 接入' });
-                })
+              if (this.dlStateFor() === 'active') {
+                LoadingProgress()
+                  .width(22)
+                  .height(22)
+                  .color('#ff4d6a')
+              } else {
+                Image($r('app.media.ic_download'))
+                  .width(26)
+                  .height(26)
+                  .fillColor(this.dlStateFor() === 'done' ? '#ffb84d' : '#ffffff')
+              }
               Text('下载')
                 .fontSize(10.5)
-                .fontColor('#ffffff')
+                .fontColor(this.dlStateFor() === 'done' ? '#ffb84d' : '#ffffff')
                 .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
             }
             .alignItems(HorizontalAlign.Center)
+            .onClick(() => {
+              this.onDownload();
+            })
 
             Column({ space: 3 }) {
               Image($r('app.media.ic_list'))

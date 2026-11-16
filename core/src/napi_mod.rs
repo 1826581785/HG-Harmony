@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 static API: Lazy<Api> = Lazy::new(Api::new);
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-fn api() -> &'static Api {
+pub(crate) fn api() -> &'static Api {
     &API
 }
 
@@ -29,6 +29,7 @@ pub fn hg_init(data_dir: String) -> String {
     let dir = PathBuf::from(&data_dir);
     let _ = DATA_DIR.set(dir.clone());
     api().bind(&dir);
+    crate::download::init(&dir);
     envelope(Ok(json!({ "ok": true, "dir": data_dir })))
 }
 
@@ -235,5 +236,84 @@ pub fn hg_img_url(url: String) -> String {
     match crate::server::base_url() {
         Some(b) => envelope(Ok(json!({ "url": format!("{}/img?u={}", b, crate::media::enc(&url)) }))),
         None => envelope(Err("媒体服务未启动，请先调用 hg_media_start".into())),
+    }
+}
+
+/* ───────────────────────── 下载引擎（阶段 6） ───────────────────────── */
+
+/// 注册下载状态回调：每次任务列表变化时推送整个快照的 JSON 字符串。
+#[napi]
+pub fn hg_dl_on_state(callback: napi_ohos::threadsafe_function::ThreadsafeFunction<String>) -> String {
+    crate::download::set_state_callback(callback);
+    envelope(Ok(json!({ "ok": true })))
+}
+
+/// 添加下载任务。返回 {id}；同剧同集已完成时 id 为 null。
+#[napi]
+pub async fn hg_dl_add(video_id: i64, ep: i64, title: String, ep_title: String) -> String {
+    let id = crate::download::dl().add(api(), video_id, ep.max(1) as u32, title, ep_title);
+    envelope(Ok(json!({ "id": id.map(|v| v as f64) })))
+}
+
+/// 任务列表快照（进入下载页时拉取 + 校验已下载文件存在性）。
+#[napi]
+pub async fn hg_dl_list() -> String {
+    crate::download::dl().verify_done_files();
+    let tasks = crate::download::dl().list();
+    envelope(serde_json::to_value(&tasks).map_err(|e| e.to_string()).map(|v| json!({ "tasks": v })))
+}
+
+/// 校验已完成文件存在性（被外部删除的记录自动移出）。
+#[napi]
+pub async fn hg_dl_verify() -> String {
+    crate::download::dl().verify_done_files();
+    envelope(Ok(json!({ "ok": true })))
+}
+
+#[napi]
+pub async fn hg_dl_pause(id: f64) -> String {
+    crate::download::dl().pause(id as u64);
+    envelope(Ok(json!({ "ok": true })))
+}
+
+#[napi]
+pub async fn hg_dl_resume(id: f64) -> String {
+    crate::download::dl().resume(api(), id as u64);
+    envelope(Ok(json!({ "ok": true })))
+}
+
+#[napi]
+pub async fn hg_dl_retry(id: f64) -> String {
+    crate::download::dl().retry(api(), id as u64);
+    envelope(Ok(json!({ "ok": true })))
+}
+
+#[napi]
+pub async fn hg_dl_remove(id: f64) -> String {
+    crate::download::dl().remove(id as u64);
+    envelope(Ok(json!({ "ok": true })))
+}
+
+/// 应用启动恢复：读 downloads.json，中断任务回队列续传 + 清残留分片缓存。
+#[napi]
+pub async fn hg_dl_restore() -> String {
+    crate::download::dl().restore(api());
+    envelope(Ok(json!({ "ok": true })))
+}
+
+/// 已完成任务成品文件的绝对路径（供 ArkTS 保存到系统图库）。
+#[napi]
+pub fn hg_dl_file(id: f64) -> String {
+    let tid = id as u64;
+    let dm = crate::download::dl();
+    let task = dm.list().into_iter().find(|t| t.id == tid);
+    match task {
+        Some(t) => match (&t.file, t.status) {
+            (Some(f), crate::download::Status::Done) => {
+                envelope(Ok(json!({ "path": crate::download::download_dir().join(&f) })))
+            }
+            _ => envelope(Err("任务未完成".into())),
+        },
+        None => envelope(Err("任务不存在".into())),
     }
 }

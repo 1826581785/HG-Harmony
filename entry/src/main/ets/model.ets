@@ -290,3 +290,22 @@ export class PostDetailData extends Post {
     return p;
   }
 }
+
+/** 下载任务（Rust download.rs Task 的 JSON 快照，键为 snake_case 原样透传） */
+export interface DlTask {
+  id: number;
+  video_id: number;
+  ep: number;
+  title: string;
+  ep_title: string;
+  /** queued / running / paused / muxing / saving / done / failed */
+  status: string;
+  seg_done: number;
+  seg_total: number;
+  mb_done: number;
+  mb_total: number;
+  speed: number;
+  error: string | null;
+  file: string | null;
+  created: number;
+}

@@ -3,6 +3,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { hgInit } from 'libhg.so';
 import { store } from '../store';
+import { dlOnState, dlRestore } from '../api';
+import { DlTask } from '../model';
 
 const DOMAIN = 0x0000;
 
@@ -23,6 +25,19 @@ export default class EntryAbility extends UIAbility {
     store.init(this.context).catch((err: Error) => {
       hilog.error(DOMAIN, 'testTag', 'store.init failed: %{public}s', err.message);
     });
+    // 下载引擎：先注册状态回调（快照 JSON → AppStorage 'dlTasks'），再恢复中断任务续传
+    // 注意：napi ThreadsafeFunction 默认 CalleeHandled=true，JS 回调收到 (err, data) 两个参数
+    dlOnState((err: Object | null, json: string) => {
+      try {
+        const tasks: Object = JSON.parse(json) as Object;
+        AppStorage.setOrCreate<DlTask[]>('dlTasks', Array.isArray(tasks) ? (tasks as DlTask[]) : []);
+      } catch (e) {
+        hilog.error(DOMAIN, 'testTag', 'dlOnState parse failed: %{public}s', String(e));
+      }
+    });
+    dlRestore().catch((err: Error) => {
+      hilog.error(DOMAIN, 'testTag', 'dlRestore failed: %{public}s', err.message);
+    });
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
   }
 
@@ -34,7 +49,8 @@ export default class EntryAbility extends UIAbility {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
 
-    windowStage.loadContent('pages/Main', (err) => {
+    // 入口页 = Index（Hello World 伪装页，四角隐藏序列解锁后跳 Main）
+    windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;

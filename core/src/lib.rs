@@ -6,8 +6,10 @@
 //! - napi_mod：NAPI 接口层（JSON 信封字符串返回）
 
 pub mod api;
+pub mod download;
 pub mod dx150;
 pub mod media;
+pub mod mux;
 pub mod napi_mod;
 pub mod net;
 pub mod server;

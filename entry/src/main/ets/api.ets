@@ -2,8 +2,9 @@
  * API 层：NAPI 信封解析 + 类型化调用。对应旧工程 src/api.ts。
  * 所有调用抛 Error（信封 ok=false 时），成功返回 data。
  */
-import { hgEdge, hgPlay, hgMediaUrl, hgImgUrl, hgMediaStart, hgLogin, hgRegister, hgLogout, hgMe, hgBoot, hgClearMediaCache } from 'libhg.so';
-import { VideoCard, VideoDetail, CommentPageData, User, RankItem, Post, PostDetailData, Pagination } from './model';
+import { hgEdge, hgPlay, hgMediaUrl, hgImgUrl, hgMediaStart, hgLogin, hgRegister, hgLogout, hgMe, hgBoot, hgClearMediaCache,
+  hgDlOnState, hgDlAdd, hgDlList, hgDlPause, hgDlResume, hgDlRetry, hgDlRemove, hgDlVerify, hgDlRestore, hgDlFile } from 'libhg.so';
+import { VideoCard, VideoDetail, CommentPageData, User, RankItem, Post, PostDetailData, Pagination, DlTask } from './model';
 import { store } from './store';
 
 export class ApiError extends Error {
@@ -212,4 +213,62 @@ export async function postDetail(id: number): Promise<PostDetailData> {
 /** 清空媒体内存缓存（封面/播放列表），对应旧 cache_clear 的媒体部分 */
 export function clearMediaCache(): void {
   hgClearMediaCache();
+}
+
+/* ── 下载引擎（阶段 6） ── */
+
+/** 注册下载状态回调（任务列表 JSON 快照）。必须在 EntryAbility.onCreate 注册。
+ * 注意：napi ThreadsafeFunction 默认 CalleeHandled=true，回调收到 (err, json) 两个参数。 */
+export function dlOnState(cb: (err: Object | null, json: string) => void): void {
+  hgDlOnState(cb);
+}
+
+/** 添加下载任务。返回任务 id；同剧同集已完成时返回 null（重复）。 */
+export async function dlAdd(videoId: number, ep: number, title: string, epTitle: string): Promise<number | null> {
+  const data = envOf(await hgDlAdd(videoId, ep, title, epTitle));
+  const id = data['id'] as number;
+  return id !== undefined && id !== null ? id : null;
+}
+
+/** 任务列表快照（含已完成文件存在性校验） */
+export async function dlList(): Promise<DlTask[]> {
+  const data = envOf(await hgDlList());
+  const arr = (data['tasks'] as Array<Object>) ?? [];
+  const out: DlTask[] = [];
+  for (const o of arr) {
+    out.push(o as DlTask);
+  }
+  return out;
+}
+
+/** 校验已完成文件存在性（被外部删除的记录自动移出） */
+export async function dlVerify(): Promise<void> {
+  await hgDlVerify();
+}
+
+/** 应用启动恢复：中断任务回队列续传 + 清残留分片缓存 */
+export async function dlRestore(): Promise<void> {
+  await hgDlRestore();
+}
+
+/** 已完成任务的成品文件绝对路径（供保存到系统图库） */
+export async function dlFile(id: number): Promise<string> {
+  const data = envOf(await hgDlFile(id));
+  return (data['path'] as string) ?? '';
+}
+
+export async function dlPause(id: number): Promise<void> {
+  await hgDlPause(id);
+}
+
+export async function dlResume(id: number): Promise<void> {
+  await hgDlResume(id);
+}
+
+export async function dlRetry(id: number): Promise<void> {
+  await hgDlRetry(id);
+}
+
+export async function dlRemove(id: number): Promise<void> {
+  await hgDlRemove(id);
 }

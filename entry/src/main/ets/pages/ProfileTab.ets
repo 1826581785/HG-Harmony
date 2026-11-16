@@ -3,7 +3,7 @@
  * 对应旧工程 pages/Profile.tsx（深色外观行暂缓，主题在阶段 7 资源化时接入）。
  */
 import { videoDetail, login, register, logout, me, clearMediaCache, coverUrl } from '../api';
-import { VideoDetail, VideoCard, FeedNavParam, FavListNavParam } from '../model';
+import { VideoDetail, VideoCard, FeedNavParam, FavListNavParam, DlTask } from '../model';
 import { store, fmtCount } from '../store';
 import { RowCard, Masonry } from '../components/Cards';
 import { promptAction } from '@kit.ArkUI';
@@ -25,6 +25,7 @@ export interface MediaSectionParam {
 @Component
 export struct ProfileTab {
   navStack: NavPathStack = new NavPathStack();
+  @StorageLink('dlTasks') dlTasks: DlTask[] = [];
   @State mode: string = 'login';
   @State username: string = '';
   @State password: string = '';
@@ -303,7 +304,7 @@ export struct ProfileTab {
           .fontSize(14.5)
           .fontWeight(FontWeight.Medium)
           .fontColor('#e8eaf0')
-        Text('离线缓存 · 阶段 6 接入')
+        Text(`离线缓存 · 进行中 ${(this.dlTasks ?? []).filter((t: DlTask) => t.status !== 'done').length} / 共 ${(this.dlTasks ?? []).length}`)
           .fontSize(10.5)
           .fontColor('#8a93a6')
       }
@@ -320,7 +321,7 @@ export struct ProfileTab {
     .backgroundColor('#141821')
     .borderRadius(12)
     .onClick(() => {
-      promptAction.showToast({ message: '下载引擎在阶段 6 接入' });
+      this.navStack.pushPathByName('downloads', '');
     })
   }
 

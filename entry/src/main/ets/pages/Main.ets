@@ -9,10 +9,12 @@ import { CategoryTab, ChannelPage } from './CategoryTab';
 import { ProfileTab, FavListPage } from './ProfileTab';
 import { RankPage } from './RankPage';
 import { PostsPage, PostDetailPage } from './PostsTab';
+import { DownloadsPage } from './DownloadsPage';
 import { FeedPage } from './FeedView';
 import { boot } from '../api';
 import { store } from '../store';
 import { playerService } from '../player/PlayerService';
+import { window } from '@kit.ArkUI';
 
 @Entry
 @Component
@@ -21,6 +23,11 @@ struct Main {
   @State navStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
+    // 主体深色 → 状态栏内容（文字/图标）改白色（启动页 Index 白底用默认黑色）
+    window.getLastWindow(getContext(this)).then((w: window.Window) => {
+      w.setWindowSystemBarProperties({ statusBarContentColor: '#ffffff' });
+    }).catch(() => {
+    });
     // 恢复登录态（token 在 Rust session.json，重启后 boot 返回 user）
     boot().then((u) => {
       store.setUser(u);
@@ -59,6 +66,8 @@ struct Main {
       PostDetailPage({ navStack: this.navStack })
     } else if (name === 'favlist') {
       FavListPage({ navStack: this.navStack })
+    } else if (name === 'downloads') {
+      DownloadsPage({ navStack: this.navStack })
     }
   }
 
