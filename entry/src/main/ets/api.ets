@@ -3,7 +3,7 @@
  * 所有调用抛 Error（信封 ok=false 时），成功返回 data。
  */
 import { hgEdge, hgPlay, hgMediaUrl, hgImgUrl, hgMediaStart } from 'libhg.so';
-import { VideoCard, VideoDetail } from './model';
+import { VideoCard, VideoDetail, CommentPageData } from './model';
 
 export class ApiError extends Error {
 }
@@ -71,4 +71,15 @@ export function coverUrl(url: string): string {
 /** 确保本地媒体服务已启动（返回 base，如 http://127.0.0.1:port） */
 export async function ensureMedia(): Promise<string> {
   return (envOf(await hgMediaStart())['base'] as string);
+}
+
+/** 按剧集分页拉评论 */
+export async function comments(id: number, ep: number, page: number, size: number): Promise<CommentPageData> {
+  const data = await get(`/api/videos/${id}/comments?ep=${ep}&page=${page}&size=${size}`);
+  return CommentPageData.from(data);
+}
+
+/** 发表评论（未登录由服务端拒绝；登录能力阶段 5 接入） */
+export async function commentSend(id: number, ep: number, text: string): Promise<void> {
+  await edge('POST', `/api/videos/${id}/comments?ep=${ep}`, JSON.stringify({ text: text }));
 }

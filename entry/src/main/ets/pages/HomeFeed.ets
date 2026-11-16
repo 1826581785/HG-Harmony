@@ -3,11 +3,29 @@
  * 对应旧工程 Home.tsx + Feed.tsx。
  * 交互：抖音式底部进度条；右侧操作栏；沉浸全屏（横屏视频可旋转 90°）。
  */
-import { VideoCard, VideoDetail } from '../model';
-import { feed, videoDetail, playUrl, coverUrl, ensureMedia } from '../api';
+import { VideoCard, VideoDetail, Comment } from '../model';
+import { feed, videoDetail, playUrl, coverUrl, ensureMedia, comments, commentSend } from '../api';
 import { fmtCount, store } from '../store';
 import { playerService } from '../player/PlayerService';
 import { promptAction } from '@kit.ArkUI';
+import { media } from '@kit.MediaKit';
+import { vibrator } from '@kit.SensorServiceKit';
+
+/** AVPlayer 实际支持档位（无 1.5，规格中的 1.5 用 1.75 替代） */
+const SPEED_STEPS: number[] = [1.0, 1.25, 1.75, 2.0];
+
+function speedEnum(f: number): media.PlaybackSpeed {
+  if (f === 1.25) {
+    return media.PlaybackSpeed.SPEED_FORWARD_1_25_X;
+  }
+  if (f === 1.75) {
+    return media.PlaybackSpeed.SPEED_FORWARD_1_75_X;
+  }
+  if (f === 2.0) {
+    return media.PlaybackSpeed.SPEED_FORWARD_2_00_X;
+  }
+  return media.PlaybackSpeed.SPEED_FORWARD_1_00_X;
+}
 
 @Component
 export struct HomeFeed {
@@ -33,6 +51,25 @@ export struct HomeFeed {
   @State playingIds: number[] = [];
   @State paused: boolean = false;
   @State playStateMsg: string = '';
+  /** 当前播放的集号（每张卡的最后一集记录在 epMap，划回恢复） */
+  @State curEp: number = 1;
+  /** 底部弹层：'' 无 / 'ep' 选集 / 'cm' 评论 */
+  @State showSheet: boolean = false;
+  @State sheetKind: string = 'ep';
+  @State epAsc: boolean = true;
+  /** 长按 2x：进行中（松手恢复）/ 已锁定（点按解除）/ 松手锁定提示 */
+  @State long2x: boolean = false;
+  @State lock2x: boolean = false;
+  @State lockHint: boolean = false;
+  /** 全屏倍速循环档下标 */
+  @State speedIdx: number = 0;
+  /** 评论面板 */
+  @State cmItems: Comment[] = [];
+  @State cmPage: number = 1;
+  @State cmPages: number = 1;
+  @State cmLoading: boolean = false;
+  @State cmText: string = '';
+  @State cmSending: boolean = false;
   /** 沉浸全屏：放 AppStorage，Main 的 onBackPress 能读到（返回键优先退全屏） */
   @StorageLink('feedFs') @Watch('onFsChange') fs: boolean = false;
   @State rotated: boolean = false;
@@ -50,6 +87,11 @@ export struct HomeFeed {
   private loadGen: number = 0;
   private barWidth: number = 1;
   private dragStartMs: number = 0;
+  private epMap: Map<number, number> = new Map();
+  /** 长按 2x 触摸跟踪 */
+  private pressY: number = 0;
+  private longTimer: number = -1;
+  private longArmed: boolean = false;
 
   aboutToAppear(): void {
     this.muted = store.muted;
@@ -85,7 +127,16 @@ export struct HomeFeed {
       }
     };
     playerService.onCompleted = () => {
-      this.playStateMsg = '播放结束';
+      // 切流收尾产生的 stopped 不触发连播
+      if (playerService.switching) {
+        return;
+      }
+      // 自动连播下一集；没有下一集则提示结束
+      if (this.curDetail && this.curDetail.episodes.includes(this.curEp + 1)) {
+        this.switchEp(this.curEp + 1);
+      } else {
+        this.playStateMsg = '播放结束';
+      }
     };
     playerService.onError = (msg: string) => {
       this.playStateMsg = msg;
@@ -94,6 +145,7 @@ export struct HomeFeed {
   }
 
   aboutToDisappear(): void {
+    this.clearLongTimer();
     playerService.release();
   }
 
@@ -167,10 +219,18 @@ export struct HomeFeed {
     this.activeIndex = index;
     const card = this.cards[index];
     this.curCard = card;
+    this.curEp = this.epMap.get(card.id) ?? 1;
     this.curMs = 0;
     this.durMs = 0;
     this.paused = false;
     this.playStateMsg = '';
+    // 换卡复位倍速/长按状态
+    this.clearLongTimer();
+    this.long2x = false;
+    this.lock2x = false;
+    this.lockHint = false;
+    this.speedIdx = 0;
+    playerService.setSpeed(media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
     this.liked = store.isLiked(card.id);
     this.faved = store.isFav(card.id);
     this.followed = store.isFollowed(this.authorId());
@@ -195,11 +255,11 @@ export struct HomeFeed {
       }
     }
     // 播放地址
-    const key = `${card.id}:1`;
+    const key = `${card.id}:${this.curEp}`;
     let url = this.urlCache.get(key) ?? '';
     if (url === '') {
       try {
-        url = await playUrl(card.id, 1);
+        url = await playUrl(card.id, this.curEp);
         this.urlCache.set(key, url);
       } catch (e) {
         if (gen === this.loadGen) {
@@ -224,6 +284,179 @@ export struct HomeFeed {
     }
   }
 
+  /** 切换当前卡的剧集（选集面板点选 / 自动连播共用） */
+  private async switchEp(ep: number): Promise<void> {
+    const card = this.curCard;
+    if (!card) {
+      return;
+    }
+    this.epMap.set(card.id, ep);
+    this.curEp = ep;
+    this.curMs = 0;
+    this.durMs = 0;
+    this.paused = false;
+    this.playStateMsg = '';
+    this.clearLongTimer();
+    this.long2x = false;
+    this.lock2x = false;
+    this.lockHint = false;
+    this.speedIdx = 0;
+    playerService.setSpeed(media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
+    const gen = ++this.loadGen;
+    const key = `${card.id}:${ep}`;
+    let url = this.urlCache.get(key) ?? '';
+    if (url === '') {
+      try {
+        url = await playUrl(card.id, ep);
+        this.urlCache.set(key, url);
+      } catch (e) {
+        if (gen === this.loadGen) {
+          this.errMsg = (e as Error).message;
+        }
+        return;
+      }
+    }
+    if (gen !== this.loadGen) {
+      return;
+    }
+    this.errMsg = '';
+    const sid = this.surfaces.get(card.id) ?? '';
+    if (sid === '') {
+      return;
+    }
+    playerService.setMuted(this.muted);
+    playerService.attach(url, sid);
+  }
+
+  /* ── 长按 2x 倍速 ── */
+
+  private clearLongTimer(): void {
+    if (this.longTimer >= 0) {
+      clearTimeout(this.longTimer);
+      this.longTimer = -1;
+    }
+  }
+
+  private vibrateShort(): void {
+    try {
+      vibrator.startVibration({ type: 'time', duration: 25 }, { usage: 'touch' })
+        .catch(() => {
+        });
+    } catch (e) {
+      // 无振动能力则静默
+    }
+  }
+
+  private onTouchCard(e: TouchEvent): void {
+    if (e.type === TouchType.Down) {
+      this.pressY = e.touches.length > 0 ? e.touches[0].y : 0;
+      this.longArmed = true;
+      this.lockHint = false;
+      if (this.longTimer < 0) {
+        this.longTimer = setTimeout(() => {
+          this.longTimer = -1;
+          if (this.longArmed && !this.lock2x) {
+            this.long2x = true;
+            playerService.setSpeed(media.PlaybackSpeed.SPEED_FORWARD_2_00_X);
+            this.vibrateShort();
+          }
+        }, 380);
+      }
+    } else if (e.type === TouchType.Move) {
+      const y = e.touches.length > 0 ? e.touches[0].y : this.pressY;
+      // 长按期间上滑超过 64px → 标记"松手锁定 2x"
+      if (this.long2x && this.pressY - y > 64) {
+        this.lockHint = true;
+      }
+    } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+      this.longArmed = false;
+      this.clearLongTimer();
+      if (this.long2x) {
+        this.long2x = false;
+        if (this.lockHint) {
+          this.lockHint = false;
+          this.lock2x = true; // 保持 2x，直到点按解除
+        } else {
+          playerService.setSpeed(media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
+        }
+      }
+    }
+  }
+
+  /** 全屏控制条：倍速循环切换 */
+  private cycleSpeed(): void {
+    const next = (this.speedIdx + 1) % SPEED_STEPS.length;
+    this.speedIdx = next;
+    playerService.setSpeed(speedEnum(SPEED_STEPS[next]));
+  }
+
+  /* ── 评论面板 ── */
+
+  private async openComments(): Promise<void> {
+    if (!this.curCard) {
+      return;
+    }
+    this.sheetKind = 'cm';
+    this.cmItems = [];
+    this.cmPage = 1;
+    this.cmPages = 1;
+    this.cmText = '';
+    this.showSheet = true;
+    await this.loadComments(1);
+  }
+
+  private async loadComments(p: number): Promise<void> {
+    if (!this.curCard || this.cmLoading) {
+      return;
+    }
+    this.cmLoading = true;
+    try {
+      const res = await comments(this.curCard.id, this.curEp, p, 20);
+      if (p === 1) {
+        this.cmItems = res.items;
+      } else {
+        const seen = new Set<number>(this.cmItems.map((c: Comment) => c.id));
+        this.cmItems = this.cmItems.concat(res.items.filter((c: Comment) => !seen.has(c.id)));
+      }
+      this.cmPage = p;
+      this.cmPages = res.pages;
+    } catch (e) {
+      if (p === 1) {
+        this.cmItems = [];
+      }
+    } finally {
+      this.cmLoading = false;
+    }
+  }
+
+  private async sendComment(): Promise<void> {
+    const t = this.cmText.trim();
+    if (t === '' || !this.curCard || this.cmSending) {
+      return;
+    }
+    if (!store.loggedIn()) {
+      promptAction.showToast({ message: '请先登录（登录功能阶段 5 接入）' });
+      return;
+    }
+    this.cmSending = true;
+    try {
+      await commentSend(this.curCard.id, this.curEp, t);
+      this.cmText = '';
+      promptAction.showToast({ message: '评论已提交，审核通过后展示' });
+      await this.loadComments(1);
+    } catch (e) {
+      promptAction.showToast({ message: (e as Error).message });
+    } finally {
+      this.cmSending = false;
+    }
+  }
+
+  /** 评论头像底色（按用户 id 稳定取色） */
+  private cmtColor(uid: number): string {
+    const palette: string[] = ['#4a90d9', '#e056a7', '#3fbf8f', '#d98a3f', '#8f6fd9', '#d9593f'];
+    return palette[Math.abs(uid) % palette.length];
+  }
+
   /* ── 元信息 ── */
 
   private metaTitle(): string {
@@ -237,7 +470,7 @@ export struct HomeFeed {
   private metaEp(): string {
     const d = this.curDetail;
     if (d && d.episodes.length > 0) {
-      return `第 1/${d.episodes.length} 集`;
+      return `第 ${this.curEp}/${d.episodes.length} 集`;
     }
     return '';
   }
@@ -351,6 +584,244 @@ export struct HomeFeed {
     return Math.min(this.scrW * this.videoW / vh, this.scrH);
   }
 
+  /* ── 底部弹层 ── */
+
+  private epList(): number[] {
+    const eps = this.curDetail ? this.curDetail.episodes : [];
+    return this.epAsc ? eps : eps.slice().reverse();
+  }
+
+  @Builder
+  sheetBody() {
+    if (this.sheetKind === 'cm') {
+      this.commentsSheet();
+    } else {
+      this.episodesSheet();
+    }
+  }
+
+  @Builder
+  episodesSheet() {
+    Column() {
+      Row({ space: 8 }) {
+        Text('选集')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#e8eaf0')
+        Text(`共 ${this.curDetail ? this.curDetail.episodes.length : 0} 集`)
+          .fontSize(11)
+          .fontColor('#8fa3c0')
+        Blank()
+        Text(this.epAsc ? '倒序' : '正序')
+          .fontSize(12)
+          .fontColor('#ff4d6a')
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .onClick(() => {
+            this.epAsc = !this.epAsc;
+          })
+        Text('✕')
+          .fontSize(14)
+          .fontColor('#8fa3c0')
+          .padding({ left: 8, top: 4, bottom: 4 })
+          .onClick(() => {
+            this.showSheet = false;
+          })
+      }
+      .width('100%')
+      .height(46)
+      .padding({ left: 16, right: 12 })
+      .alignItems(VerticalAlign.Center)
+
+      if (this.curDetail && this.curDetail.episodes.length > 0) {
+        Grid() {
+          ForEach(this.epList(), (ep: number) => {
+            GridItem() {
+              Text(`${ep}`)
+                .fontSize(12.5)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(ep === this.curEp ? '#ffffff' : '#c3cad6')
+                .backgroundColor(ep === this.curEp ? '#ff4d6a' : '#262a33')
+                .borderRadius(8)
+                .textAlign(TextAlign.Center)
+                .height(40)
+                .onClick(() => {
+                  this.switchEp(ep);
+                  this.showSheet = false;
+                })
+            }
+          }, (ep: number) => `${ep}`)
+        }
+        .columnsTemplate('1fr 1fr 1fr 1fr')
+        .columnsGap(8)
+        .rowsGap(8)
+        .padding({ left: 16, right: 16, bottom: 12 })
+        .layoutWeight(1)
+      } else {
+        Column() {
+          Text('暂无剧集')
+            .fontSize(12)
+            .fontColor('#5c6678')
+            .padding({ top: 40 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#16181d')
+  }
+
+  @Builder
+  commentsSheet() {
+    Column() {
+      Row({ space: 8 }) {
+        Text('评论')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#e8eaf0')
+        Text(`${fmtCount(this.commentCount())} 条`)
+          .fontSize(11)
+          .fontColor('#8fa3c0')
+        Blank()
+        Text('✕')
+          .fontSize(14)
+          .fontColor('#8fa3c0')
+          .padding({ left: 8, top: 4, bottom: 4 })
+          .onClick(() => {
+            this.showSheet = false;
+          })
+      }
+      .width('100%')
+      .height(46)
+      .padding({ left: 16, right: 12 })
+      .alignItems(VerticalAlign.Center)
+
+      if (this.cmItems.length === 0 && !this.cmLoading) {
+        Column() {
+          Text('还没有评论，来说两句吧')
+            .fontSize(12)
+            .fontColor('#5c6678')
+            .padding({ top: 40 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else {
+        List() {
+          ForEach(this.cmItems, (c: Comment) => {
+            ListItem() {
+              this.commentItem(c)
+            }
+          }, (c: Comment) => `${c.id}`)
+          ListItem() {
+            Text(this.cmLoading ? '加载中…' : (this.cmPage >= this.cmPages ? '— 到底了 —' : ''))
+              .fontSize(10.5)
+              .fontColor('#5c6678')
+              .width('100%')
+              .textAlign(TextAlign.Center)
+              .padding({ top: 8, bottom: 8 })
+          }
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .padding({ left: 16, right: 16 })
+        .onReachEnd(() => {
+          if (this.cmPage < this.cmPages) {
+            this.loadComments(this.cmPage + 1);
+          }
+        })
+      }
+
+      Row({ space: 8 }) {
+        TextInput({ text: this.cmText, placeholder: '说点什么…' })
+          .layoutWeight(1)
+          .height(38)
+          .backgroundColor('#262a33')
+          .fontColor('#e8eaf0')
+          .placeholderColor('#5c6678')
+          .borderRadius(19)
+          .onChange((v: string) => {
+            this.cmText = v;
+          })
+        Button() {
+          Text('发送')
+            .fontSize(12.5)
+            .fontColor('#ffffff')
+        }
+        .height(38)
+        .backgroundColor(this.cmSending ? '#8a3a4e' : '#ff4d6a')
+        .onClick(() => {
+          this.sendComment();
+        })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 8, bottom: 12 })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#16181d')
+  }
+
+  @Builder
+  commentItem(c: Comment) {
+    Row({ space: 10 }) {
+      Stack() {
+        Circle({ width: 34, height: 34 })
+          .fill(this.cmtColor(c.userId))
+        if (c.nickname !== '') {
+          Text(c.nickname.substring(0, 1))
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#ffffff')
+        }
+      }
+      .width(34)
+      .height(34)
+
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          Text(c.nickname === '' ? `用户${c.userId}` : c.nickname)
+            .fontSize(12)
+            .fontColor('#8fa3c0')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (c.isPinned) {
+            Text('置顶')
+              .fontSize(9)
+              .fontColor('#ffb84d')
+              .backgroundColor('rgba(255,184,77,0.15)')
+              .borderRadius(3)
+              .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+          }
+          Blank()
+          Text(`${c.time}${c.ipRegion !== '' ? ` · ${c.ipRegion}` : ''}`)
+            .fontSize(10)
+            .fontColor('#5c6678')
+        }
+        .width('100%')
+
+        Text(c.text)
+          .fontSize(13)
+          .fontColor('#e8eaf0')
+
+        Row({ space: 10 }) {
+          Text(`赞 ${fmtCount(c.likeCount)}`)
+            .fontSize(10)
+            .fontColor('#5c6678')
+          Text(`回复 ${c.replyCount}`)
+            .fontSize(10)
+            .fontColor('#5c6678')
+        }
+        .width('100%')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .padding({ top: 10, bottom: 10 })
+  }
+
   build() {
     Stack() {
       // 卡片轮播：每页内嵌视频表面（画面随页面滑动）+ 封面遮罩 + 单击暂停
@@ -387,7 +858,16 @@ export struct HomeFeed {
           }
           .width('100%')
           .height('100%')
+          .onTouch((e: TouchEvent) => {
+            this.onTouchCard(e);
+          })
           .gesture(TapGesture({ count: 1 }).onAction(() => {
+            if (this.lock2x) {
+              // 锁定态：第一次点按只解除锁定
+              this.lock2x = false;
+              playerService.setSpeed(media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
+              return;
+            }
             this.togglePlay();
           }))
         }, (c: VideoCard) => `${c.id}`)
@@ -396,7 +876,8 @@ export struct HomeFeed {
       .loop(false)
       .indicator(false)
       .cachedCount(1)
-      .disableSwipe(this.fs)
+      // 长按 2x 期间禁用原生滚动，防止上滑被列表吃掉
+      .disableSwipe(this.fs || this.long2x)
       .width('100%')
       .height('100%')
       .onChange((i: number) => {
@@ -406,6 +887,19 @@ export struct HomeFeed {
         playerService.pause();
         this.activate(i);
       })
+
+      // 倍速状态胶囊（顶部居中）
+      if (this.long2x || this.lock2x) {
+        Text(this.lockHint ? '松手锁定 2x' : (this.lock2x ? '已锁定 2x · 点击解除' : '2x 倍速中'))
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#ffffff')
+          .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+          .backgroundColor('rgba(0,0,0,0.65)')
+          .borderRadius(14)
+          .position({ x: '50%', y: 62 })
+          .markAnchor({ x: '50%', y: 0 })
+      }
 
       // 顶部：静音 + 搜索（非全屏时）；全屏时：横屏切换（横屏视频）+ 退出
       Row() {
@@ -518,7 +1012,7 @@ export struct HomeFeed {
                 .width(26)
                 .height(26)
                 .onClick(() => {
-                  promptAction.showToast({ message: '评论面板在阶段 4 接入' });
+                  this.openComments();
                 })
               Text(fmtCount(this.commentCount()))
                 .fontSize(10.5)
@@ -546,7 +1040,8 @@ export struct HomeFeed {
                 .width(25)
                 .height(25)
                 .onClick(() => {
-                  promptAction.showToast({ message: '选集面板在阶段 4 接入' });
+                  this.sheetKind = 'ep';
+                  this.showSheet = true;
                 })
               Text('选集')
                 .fontSize(10.5)
@@ -636,6 +1131,17 @@ export struct HomeFeed {
             Text(`${this.fmtTime(this.curMs)} / ${this.fmtTime(this.durMs)}`)
               .fontSize(11.5)
               .fontColor('#ffffff')
+            Blank()
+            Text(`${SPEED_STEPS[this.speedIdx]}x`)
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.speedIdx > 0 ? '#ff4d6a' : '#ffffff')
+              .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+              .backgroundColor('rgba(0,0,0,0.45)')
+              .borderRadius(12)
+              .onClick(() => {
+                this.cycleSpeed();
+              })
           }
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 6 })
@@ -737,6 +1243,15 @@ export struct HomeFeed {
     .onAreaChange((oldArea: Area, newArea: Area) => {
       this.scrW = newArea.width as number;
       this.scrH = newArea.height as number;
+    })
+    // 底部弹层（选集 / 评论共用一个 sheet，内容按 sheetKind 切换）
+    .bindSheet($$this.showSheet, (): void => {
+      this.sheetBody();
+    }, {
+      height: '72%',
+      dragBar: true,
+      showClose: false,
+      backgroundColor: '#16181d'
     })
   }
 }

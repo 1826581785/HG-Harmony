@@ -96,6 +96,7 @@ export class PlayerService {
           if (stNow === 'prepared') {
             // 确认仍要播放本流，才摘封面（onPrepared）；若状态已被新流切走则交给新 attach/看门狗
             this.applyScale();
+            this.applySpeed();
             this.onDuration(p.duration);
             this.onPrepared();
             await p.play();
@@ -109,6 +110,7 @@ export class PlayerService {
           return;
         }
         this.applyScale();
+        this.applySpeed();
         this.onDuration(p.duration);
       } else if (state === 'playing') {
         if (stale || p.state !== 'playing') {
@@ -267,9 +269,28 @@ export class PlayerService {
     }
   }
 
+  /** 期望倍速：attach/reset 会重置播放器，prepared 后按此值重新生效 */
+  private pendingSpeed: media.PlaybackSpeed = media.PlaybackSpeed.SPEED_FORWARD_1_00_X;
+
   setSpeed(speed: media.PlaybackSpeed): void {
-    if (this.player) {
-      try { this.player.setSpeed(speed); } catch (e) { /* 忽略 */ }
+    this.pendingSpeed = speed;
+    const ok = this.stateName === 'prepared' || this.stateName === 'playing'
+      || this.stateName === 'paused' || this.stateName === 'completed';
+    if (!ok) {
+      return;
+    }
+    try {
+      this.player?.setSpeed(speed);
+    } catch (e) {
+      // 静默：prepared 态还会再试一次
+    }
+  }
+
+  private applySpeed(): void {
+    try {
+      this.player?.setSpeed(this.pendingSpeed);
+    } catch (e) {
+      // 静默
     }
   }
 

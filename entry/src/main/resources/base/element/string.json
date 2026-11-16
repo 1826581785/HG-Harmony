@@ -15,6 +15,10 @@
     {
       "name": "perm_internet_reason",
       "value": "联网获取数据"
+    },
+    {
+      "name": "perm_vibrate_reason",
+      "value": "长按倍速时提供震动反馈"
     }
   ]
 }

@@ -79,6 +79,11 @@ class Store {
     }
   }
 
+  /** 是否已登录（token 在阶段 5 登录模块接入，此前恒为 false） */
+  loggedIn(): boolean {
+    return false;
+  }
+
   isLiked(id: number): boolean {
     return this.likes.includes(id);
   }
