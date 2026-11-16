@@ -79,7 +79,10 @@ export struct HomeFeed {
       }
     };
     playerService.onPaused = () => {
-      this.paused = true;
+      // 切流过程中的 pause 是收尾动作，不算用户暂停
+      if (!playerService.switching) {
+        this.paused = true;
+      }
     };
     playerService.onCompleted = () => {
       this.playStateMsg = '播放结束';
@@ -397,6 +400,10 @@ export struct HomeFeed {
       .width('100%')
       .height('100%')
       .onChange((i: number) => {
+        // 旧视频完全划走的瞬间立即停声画（新流 attach 后自动恢复播放）；
+        // switching 标记防止这一瞬间的 onPaused 闪出暂停大按钮
+        playerService.switching = true;
+        playerService.pause();
         this.activate(i);
       })
 
