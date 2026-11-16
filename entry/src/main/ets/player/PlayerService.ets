@@ -90,7 +90,8 @@ export class PlayerService {
         p.surfaceId = this.surfaceId;
         try {
           await p.prepare();
-          if (p.state === 'prepared') {
+          const stNow: string = p.state;
+          if (stNow === 'prepared') {
             await p.play();
           }
         } catch (e) {
