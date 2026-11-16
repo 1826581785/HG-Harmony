@@ -34,11 +34,19 @@ export class PlayerService {
   /** 最近上报的视频尺寸（0 表示未知） */
   private lastVideoW: number = 0;
   private lastVideoH: number = 0;
+  /** 最近一次状态回调记录的状态名（applyScale 的状态闸门） */
+  private stateName: string = 'idle';
 
-  /** 缩放策略：竖屏视频 cover 裁剪填充，横屏视频 contain。失败不中断播放。 */
+  /** 缩放策略：竖屏视频 cover 裁剪填充，横屏视频 contain。
+   *  仅在合法状态执行（否则 AVPlayer 抛 5400102）；失败静默，不闪错误。 */
   private applyScale(): void {
     const p = this.player;
     if (!p || this.lastVideoW <= 0 || this.lastVideoH <= 0) {
+      return;
+    }
+    const ok = this.stateName === 'prepared' || this.stateName === 'playing'
+      || this.stateName === 'paused' || this.stateName === 'completed';
+    if (!ok) {
       return;
     }
     try {
@@ -46,7 +54,7 @@ export class PlayerService {
         ? media.VideoScaleType.VIDEO_SCALE_TYPE_FIT_CROP
         : media.VideoScaleType.VIDEO_SCALE_TYPE_FIT;
     } catch (e) {
-      this.onError(`setScaleType 失败: ${(e as BusinessError).message ?? String(e)}`);
+      // 静默：缩放失败不影响播放，prepared 态还会再试一次
     }
   }
 
@@ -71,34 +79,38 @@ export class PlayerService {
       if (this.player !== p) {
         return;
       }
+      this.stateName = state;
       // 旧流被 reset 后仍可能排队送达的事件：一律丢弃，防止对 idle 状态 prepare
       const stale = this.urlGen !== this.generation;
       if (state === 'initialized') {
-        if (stale) {
+        // 执行时刻以 p.state 为准（事件到达 ≠ 执行时刻）：已经不是 initialized 就说明被新流 reset 掉了
+        if (stale || p.state !== 'initialized') {
           return;
         }
         p.surfaceId = this.surfaceId;
         try {
           await p.prepare();
-          await p.play();
+          if (p.state === 'prepared') {
+            await p.play();
+          }
         } catch (e) {
           this.switching = false;
           this.onError(`prepare/play 异常: ${(e as BusinessError).message ?? String(e)}`);
         }
       } else if (state === 'prepared') {
-        if (stale) {
+        if (stale || p.state !== 'prepared') {
           return;
         }
         this.applyScale();
         this.onDuration(p.duration);
       } else if (state === 'playing') {
-        if (stale) {
+        if (stale || p.state !== 'playing') {
           return;
         }
         this.switching = false;
         this.onPlaying();
       } else if (state === 'paused') {
-        if (stale) {
+        if (stale || p.state !== 'paused') {
           return;
         }
         this.onPaused();
