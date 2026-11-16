@@ -1,4 +1,4 @@
-import { hello, hgVersion, hgInit, hgSelftest, hgMediaStart, hgPlay, hgMediaUrl, hgMediaSelftest, hgSetProxy, hgGetProxy } from 'libhg.so';
+import { hello, hgVersion, hgInit, hgSelftest, hgMediaStart, hgPlay, hgMediaUrl, hgMediaSelftest } from 'libhg.so';
 import { media } from '@kit.MediaKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
@@ -14,8 +14,6 @@ struct Index {
   @State mediaTest: string = '未执行';
   @State playMsg: string = '未播放';
   @State running: boolean = false;
-  @State proxyAddr: string = '';
-  @State proxyMsg: string = '';
   private surfaceId: string = '';
   private xcController: XComponentController = new XComponentController();
   private player: media.AVPlayer | null = null;
@@ -23,13 +21,6 @@ struct Index {
   aboutToAppear(): void {
     // session.json 等持久化文件落在应用沙箱 filesDir
     hgInit(getContext(this).filesDir);
-    this.proxyAddr = hgGetProxy();
-  }
-
-  private applyProxy(): void {
-    const r = JSON.parse(hgSetProxy(this.proxyAddr)) as Record<string, Object>;
-    const v = (r.data as Record<string, Object>).proxy as string;
-    this.proxyMsg = v === '' ? '已恢复直连' : `代理已设为 ${v}`;
   }
 
   private fmtSteps(r: Record<string, Object>): string {
@@ -106,17 +97,25 @@ struct Index {
       p.on('error', (err: BusinessError) => {
         this.playMsg = `播放错误(${err.code}): ${err.message}`;
       });
-      p.on('stateChange', (state: string) => {
-        if (state === 'completed' || state === 'stopped') {
+      p.on('stateChange', async (state: string) => {
+        if (state === 'initialized') {
+          // initialized 状态下才能绑 surface 并 prepare
+          p.surfaceId = this.surfaceId;
+          try {
+            await p.prepare();
+            await p.play();
+            this.player = p;
+            this.playMsg = '播放中';
+          } catch (e) {
+            this.playMsg = `prepare/play 异常: ${(e as BusinessError).message ?? String(e)}`;
+          }
+        } else if (state === 'completed' || state === 'stopped') {
           this.playMsg = '播放结束';
         }
       });
+      // 赋 url 后 AVPlayer 异步进入 initialized，prepare 由状态回调驱动
       p.url = localUrl;
-      p.surfaceId = this.surfaceId;
-      await p.prepare();
-      await p.play();
-      this.player = p;
-      this.playMsg = '播放中';
+      this.playMsg = '初始化中…';
     } catch (e) {
       this.playMsg = `调用异常: ${(e as BusinessError).message ?? String(e)}`;
     }
@@ -130,31 +129,6 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor('#e8eaf0')
           .alignSelf(ItemAlign.Center)
-
-        Row({ space: 8 }) {
-          TextInput({ text: this.proxyAddr, placeholder: '代理 http://192.168.x.x:7890（空=直连）' })
-            .height(40)
-            .fontSize(12)
-            .fontColor('#d8dee9')
-            .placeholderColor('#5a6478')
-            .backgroundColor('#1a2233')
-            .layoutWeight(1)
-            .onChange((v: string) => {
-              this.proxyAddr = v;
-            })
-          Button('应用')
-            .height(40)
-            .fontSize(13)
-            .onClick(() => {
-              this.applyProxy();
-            })
-        }
-        .width('100%')
-        if (this.proxyMsg !== '') {
-          Text(this.proxyMsg)
-            .fontSize(11)
-            .fontColor('#8fa3c0')
-        }
 
         XComponent({ id: 'player', type: 'surface', controller: this.xcController })
           .width('100%')
