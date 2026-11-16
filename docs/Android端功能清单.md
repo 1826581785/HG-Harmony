@@ -1,12 +1,12 @@
 # Android 端功能清单（HarmonyOS 移植参考）
 
-> 源码基线：`D:\workspace\react\HuangGuo`（HGhub 1.0.1，commit a895fa8）。
+> 源码基线：`D:\workspace\react\HuangGuo`（ 1.0.1，commit a895fa8）。
 > 本文只覆盖 **Android 端实际启用的功能**；桌面端独有功能（窗口壳、侧边栏、画中画、键盘快捷键、剧场模式）在文末单独列出，移植时默认不需要。
 > 仅个人学习用途。
 
 ## 1. 应用概览
 
-- **应用名**：HGhub（第三方客户端，仅供个人学习）
+- **应用名**：（第三方客户端，仅供个人学习）
 - **内容源**：单一第三方站点（下称「上游」，地址见源码 `src-tauri/src/net.rs` 的 `BASE` 常量）
 - **架构**：React 19 + TS + Tailwind 4 前端 WebView 层 + Rust 业务层（Tauri 2 打包），两者通过 Tauri command（IPC）和自定义协议通信。
 - **双端检测**：前端按 UA 判定 `platform = "android" | "windows"`（`src/api.ts:31`），Android 走无窗口壳的 `MobileShell`，顶部/底部使用 `env(safe-area-inset-*)` CSS 变量适配刘海与手势条。
@@ -136,7 +136,7 @@ HarmonyOS 侧需要实现同级的 `onBackPress` 拦截链。
 - **设置**：深色/浅色主题开关（持久化）；本地数据统计行。
 - **关于弹窗**：版本、简介、复制仓库地址。
 - **清理缓存弹窗**：清除封面/播放缓存 + 本地喜欢/收藏/历史/搜索历史（保留登录态）。
-- 底部版本文字（`HGhub 1.0.0 · Android 客户端`）。
+- 底部版本文字（` 1.0.0 · Android 客户端`）。
 
 ### 3.10 我的下载（`pages/Downloads.tsx`）
 - 顶部返回 + 标题 + 子 Tab：**下载中 (n) / 已下载 (n)**。
@@ -151,8 +151,8 @@ HarmonyOS 侧需要实现同级的 `onBackPress` 拦截链。
 
 | 数据 | 存储 | 内容 |
 | --- | --- | --- |
-| 应用状态 | `localStorage["hghub_app_v1"]` | 喜欢列表、收藏列表、观看历史（≤80）、关注列表、静音、音量、搜索历史（≤12） |
-| 主题 | `localStorage["hghub_theme"]` | dark / light（默认 dark） |
+| 应用状态 | `localStorage["_app_v1"]` | 喜欢列表、收藏列表、观看历史（≤80）、关注列表、静音、音量、搜索历史（≤12） |
+| 主题 | `localStorage["_theme"]` | dark / light（默认 dark） |
 | 会话 | 应用数据目录 `session.json` | token、用户资料、**visitor_id**（32 位十六进制设备身份，首启生成后复用） |
 | 下载任务 | 应用数据目录 `downloads.json` | 全量任务快照，启动时恢复并接管 |
 

@@ -2,7 +2,7 @@
 name = "hg"
 version = "0.1.0"
 edition = "2021"
-description = "HGhub 业务核心层（dx150 协议 / 媒体代理 / 下载引擎），NAPI 暴露给 ArkTS"
+description = " 业务核心层（dx150 协议 / 媒体代理 / 下载引擎），NAPI 暴露给 ArkTS"
 
 [lib]
 name = "hg"

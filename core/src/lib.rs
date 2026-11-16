@@ -1,4 +1,4 @@
-//! HGhub 业务核心层（Rust → OHOS NAPI）。
+//!  业务核心层（Rust → OHOS NAPI）。
 //!
 //! 模块结构与旧工程 src-tauri/src/ 一一对应：
 //! - net / dx150 / session：逐字平移（crate::net 内部引用路径不变）
