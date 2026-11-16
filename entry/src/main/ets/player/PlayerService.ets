@@ -11,6 +11,8 @@ export class PlayerService {
   private targetUrl: string = '';
   /** 每次 attach 递增，防止旧回调串流 */
   private generation: number = 0;
+  /** 当前正在初始化的 url 的代数（区分过期流的迟到事件） */
+  private urlGen: number = -1;
   /** 播放器忙（正在切流） */
   switching: boolean = false;
 
@@ -50,6 +52,10 @@ export class PlayerService {
 
   private bindEvents(p: media.AVPlayer): void {
     p.on('error', (err: BusinessError) => {
+      // 过期流（已被新 attach reset 掉）的错误不上浮，避免闪报错
+      if (this.urlGen !== this.generation) {
+        return;
+      }
       this.onError(`播放错误(${err.code}): ${err.message}`);
     });
     p.on('timeUpdate', (t: number) => {
@@ -65,7 +71,12 @@ export class PlayerService {
       if (this.player !== p) {
         return;
       }
+      // 旧流被 reset 后仍可能排队送达的事件：一律丢弃，防止对 idle 状态 prepare
+      const stale = this.urlGen !== this.generation;
       if (state === 'initialized') {
+        if (stale) {
+          return;
+        }
         p.surfaceId = this.surfaceId;
         try {
           await p.prepare();
@@ -75,14 +86,26 @@ export class PlayerService {
           this.onError(`prepare/play 异常: ${(e as BusinessError).message ?? String(e)}`);
         }
       } else if (state === 'prepared') {
+        if (stale) {
+          return;
+        }
         this.applyScale();
         this.onDuration(p.duration);
       } else if (state === 'playing') {
+        if (stale) {
+          return;
+        }
         this.switching = false;
         this.onPlaying();
       } else if (state === 'paused') {
+        if (stale) {
+          return;
+        }
         this.onPaused();
       } else if (state === 'completed' || state === 'stopped') {
+        if (stale) {
+          return;
+        }
         this.onCompleted();
       }
     });
@@ -111,6 +134,7 @@ export class PlayerService {
     if (gen !== this.generation) {
       return; // 已有更新的切流请求
     }
+    this.urlGen = gen;
     p.url = url;
   }
 
