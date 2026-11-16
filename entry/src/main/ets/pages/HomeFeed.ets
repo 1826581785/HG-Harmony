@@ -1,12 +1,14 @@
 /**
  * 首页信息流：竖向 Swiper + 单 XComponent/单 AVPlayer 切流。
- * 对应旧工程 Home.tsx + Feed.tsx 的信息流部分。
- * 阶段 3 范围：分页加载、预取、播放地址缓存、观看历史、静音、右下信息层。
+ * 对应旧工程 Home.tsx + Feed.tsx。
+ * 交互：抖音式底部进度条（平时细条，拖动变粗 + 时间气泡，松手 seek）；
+ * 右侧纵向操作栏；播放成功前显示封面。
  */
 import { VideoCard, VideoDetail } from '../model';
 import { feed, videoDetail, playUrl, coverUrl, ensureMedia } from '../api';
-import { store } from '../store';
+import { fmtCount, store } from '../store';
 import { playerService } from '../player/PlayerService';
+import { promptAction } from '@kit.ArkUI';
 
 @Component
 export struct HomeFeed {
@@ -16,11 +18,18 @@ export struct HomeFeed {
   @State loading: boolean = false;
   @State done: boolean = false;
   @State errMsg: string = '';
-  /** 视频元信息缓存（当前卡片的标题/作者/集数） */
   @State curDetail: VideoDetail | null = null;
   @State curCard: VideoCard | null = null;
   @State muted: boolean = true;
   @State ready: boolean = false;
+  @State liked: boolean = false;
+  @State faved: boolean = false;
+  @State curMs: number = 0;
+  @State durMs: number = 0;
+  @State dragging: boolean = false;
+  @State dragMs: number = 0;
+  @State coverVisible: boolean = true;
+  @State playStateMsg: string = '';
   private surfaceId: string = '';
   private xcController: XComponentController = new XComponentController();
   private detailCache: Map<number, VideoDetail> = new Map();
@@ -29,10 +38,35 @@ export struct HomeFeed {
   private pages: number = 1;
   private loadingMore: boolean = false;
   private loadGen: number = 0;
+  /** 进度条热区宽度（onAreaChange 记录） */
+  private barWidth: number = 1;
+  private dragStartMs: number = 0;
 
   aboutToAppear(): void {
     this.muted = store.muted;
+    playerService.onTime = (ms: number) => {
+      this.curMs = ms;
+    };
+    playerService.onDuration = (ms: number) => {
+      this.durMs = ms;
+    };
+    playerService.onPlaying = () => {
+      this.coverVisible = false;
+      this.playStateMsg = '';
+    };
+    playerService.onPaused = () => {
+    };
+    playerService.onCompleted = () => {
+      this.playStateMsg = '播放结束';
+    };
+    playerService.onError = (msg: string) => {
+      this.playStateMsg = msg;
+    };
     this.initFeed();
+  }
+
+  aboutToDisappear(): void {
+    playerService.release();
   }
 
   async initFeed(): Promise<void> {
@@ -78,6 +112,12 @@ export struct HomeFeed {
     this.activeIndex = index;
     const card = this.cards[index];
     this.curCard = card;
+    this.curMs = 0;
+    this.durMs = 0;
+    this.playStateMsg = '';
+    this.coverVisible = true;
+    this.liked = store.isLiked(card.id);
+    this.faved = store.isFav(card.id);
     // 详情缓存（含邻接预取）
     for (const di of [index, index + 1, index - 1]) {
       if (di < 0 || di >= this.cards.length) {
@@ -123,8 +163,8 @@ export struct HomeFeed {
     }
   }
 
-  private coverOf(c: VideoCard | null, d: VideoDetail | null): string {
-    const raw = (d && d.cover !== '') ? d.cover : (c ? c.cover : '');
+  private coverOf(): string {
+    const raw = (this.curDetail && this.curDetail.cover !== '') ? this.curDetail.cover : (this.curCard ? this.curCard.cover : '');
     return coverUrl(raw);
   }
 
@@ -144,9 +184,66 @@ export struct HomeFeed {
     return '';
   }
 
+  private likeCount(): number {
+    const base = this.curDetail ? this.curDetail.likeCount : (this.curCard ? this.curCard.likeCount : 0);
+    return base + (this.liked ? 1 : 0);
+  }
+
+  private commentCount(): number {
+    return this.curDetail ? this.curDetail.commentCount : (this.curCard ? this.curCard.commentCount : 0);
+  }
+
+  private collectCount(): number {
+    const base = this.curDetail ? this.curDetail.collectCount : (this.curCard ? this.curCard.collectCount : 0);
+    return base + (this.faved ? 1 : 0);
+  }
+
+  private async toggleLike(): Promise<void> {
+    if (!this.curCard) {
+      return;
+    }
+    this.liked = await store.toggleLike(this.curCard.id);
+    promptAction.showToast({ message: this.liked ? '已加入喜欢' : '已取消喜欢' });
+  }
+
+  private async toggleFav(): Promise<void> {
+    if (!this.curCard) {
+      return;
+    }
+    this.faved = await store.toggleFav(this.curCard.id);
+    promptAction.showToast({ message: this.faved ? '已收藏' : '已取消收藏' });
+  }
+
+  /* ── 进度条 ── */
+
+  private fmtTime(ms: number): string {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(s / 60);
+    return `${m}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  private barProgress(): number {
+    const ms = this.dragging ? this.dragMs : this.curMs;
+    const d = this.durMs > 0 ? this.durMs : 1;
+    return Math.max(0, Math.min(1, ms / d));
+  }
+
+  private onBarDrag(offsetX: number): void {
+    const target = this.dragStartMs + (offsetX / this.barWidth) * this.durMs;
+    this.dragMs = Math.max(0, Math.min(this.durMs, target));
+  }
+
+  private endBarDrag(): void {
+    this.dragging = false;
+    if (this.durMs > 0) {
+      playerService.seek(this.dragMs);
+      this.curMs = this.dragMs;
+    }
+  }
+
   build() {
     Stack() {
-      // 卡片轮播（每页显示封面 + 底部信息）
+      // 卡片轮播（每页显示封面）
       Swiper() {
         ForEach(this.cards, (c: VideoCard, i: number) => {
           Stack() {
@@ -169,10 +266,11 @@ export struct HomeFeed {
         this.activate(i);
       })
 
-      // 单一视频表面：叠在整个 Swiper 之上，切页时由 PlayerService 换流
+      // 单一视频表面：切页时由 PlayerService 换流；触摸放行给 Swiper
       XComponent({ id: 'feedplayer', type: 'surface', controller: this.xcController })
         .width('100%')
         .height('100%')
+        .hitTestBehavior(HitTestMode.Transparent)
         .onLoad(() => {
           this.surfaceId = this.xcController.getXComponentSurfaceId();
           if (this.cards.length > 0) {
@@ -180,31 +278,95 @@ export struct HomeFeed {
           }
         })
 
-      // 底部信息层文字带阴影保证可读（渐变遮罩阶段 4 再补）
+      // 封面遮罩：出画面后隐藏
+      if (this.coverVisible) {
+        Image(this.coverOf())
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .hitTestBehavior(HitTestMode.Transparent)
+      }
 
       // 顶部：静音 + 搜索
       Row() {
         Blank()
-        Button(this.muted ? '🔇' : '🔊')
-          .width(36)
-          .height(36)
-          .fontSize(16)
+        Button(this.muted ? '静音' : '有声')
+          .height(32)
+          .fontSize(12)
+          .fontColor('#ffffff')
           .backgroundColor('rgba(0,0,0,0.45)')
           .onClick(() => {
             this.muted = !this.muted;
             store.setMuted(this.muted);
             playerService.setMuted(this.muted);
           })
-        Button('🔍')
-          .width(36)
-          .height(36)
-          .fontSize(15)
+        Button('搜索')
+          .height(32)
+          .fontSize(12)
+          .fontColor('#ffffff')
           .margin({ left: 8 })
           .backgroundColor('rgba(0,0,0,0.45)')
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 10 })
       .hitTestBehavior(HitTestMode.Transparent)
+
+      // 右侧纵向操作栏
+      Column({ space: 16 }) {
+        Text(this.liked ? '❤️' : '🤍')
+          .fontSize(26)
+          .onClick(() => {
+            this.toggleLike();
+          })
+        Text(fmtCount(this.likeCount()))
+          .fontSize(10.5)
+          .fontColor('#ffffff')
+          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+
+        Text('💬')
+          .fontSize(25)
+          .onClick(() => {
+            promptAction.showToast({ message: '评论功能在阶段 4 接入' });
+          })
+        Text(fmtCount(this.commentCount()))
+          .fontSize(10.5)
+          .fontColor('#ffffff')
+          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+
+        Text(this.faved ? '⭐' : '☆')
+          .fontSize(26)
+          .onClick(() => {
+            this.toggleFav();
+          })
+        Text(fmtCount(this.collectCount()))
+          .fontSize(10.5)
+          .fontColor('#ffffff')
+          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+
+        Text('📋')
+          .fontSize(25)
+          .onClick(() => {
+            promptAction.showToast({ message: '选集面板在阶段 4 接入' });
+          })
+        Text('选集')
+          .fontSize(10.5)
+          .fontColor('#ffffff')
+          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+
+        Text('🔗')
+          .fontSize(25)
+          .onClick(() => {
+            promptAction.showToast({ message: '分享功能在阶段 4 接入' });
+          })
+        Text('分享')
+          .fontSize(10.5)
+          .fontColor('#ffffff')
+          .shadow({ radius: 3, color: 'rgba(0,0,0,0.7)', offsetX: 0, offsetY: 1 })
+      }
+      .alignItems(HorizontalAlign.Center)
+      .position({ x: '100%', y: '100%' })
+      .markAnchor({ x: '100%', y: '100%' })
+      .padding({ right: 14, bottom: 150 })
 
       // 左下信息层
       Column({ space: 6 }) {
@@ -242,10 +404,80 @@ export struct HomeFeed {
         }
       }
       .width('100%')
-      .padding({ left: 14, right: 76, bottom: 64 })
+      .padding({ left: 14, right: 76, bottom: 44 })
       .position({ y: '100%' })
       .markAnchor({ y: '100%' })
       .hitTestBehavior(HitTestMode.Transparent)
+
+      // 底部进度条（抖音式：平时细条，拖动变粗 + 时间气泡）
+      Column() {
+        if (this.dragging && this.durMs > 0) {
+          Text(`${this.fmtTime(this.dragMs)} / ${this.fmtTime(this.durMs)}`)
+            .fontSize(13)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#ffffff')
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .backgroundColor('rgba(0,0,0,0.7)')
+            .borderRadius(8)
+            .margin({ bottom: 8 })
+        }
+        Row() {
+          Row()
+            .width(`${this.barProgress() * 100}%`)
+            .height(this.dragging ? 5 : 2.5)
+            .backgroundColor(this.dragging ? '#ff4d6a' : '#ffffff')
+            .borderRadius(2.5)
+          Row()
+            .layoutWeight(1)
+            .height(this.dragging ? 5 : 2.5)
+            .backgroundColor('rgba(255,255,255,0.2)')
+            .borderRadius(2.5)
+          if (this.dragging) {
+            Circle({ width: 12, height: 12 })
+              .fill('#ff4d6a')
+              .margin({ left: -12 })
+          }
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+      }
+      .width('100%')
+      .padding({ left: 0, right: 0, bottom: 6, top: 10 })
+      .position({ y: '100%' })
+      .markAnchor({ y: '100%' })
+      .onAreaChange((oldArea: Area, newArea: Area) => {
+        const w: number = newArea.width as number;
+        this.barWidth = w > 0 ? w : 1;
+      })
+      .gesture(PanGesture({ direction: PanDirection.Horizontal, fingers: 1, distance: 5 })
+        .onActionStart((e: GestureEvent) => {
+          if (this.durMs <= 0) {
+            return;
+          }
+          this.dragStartMs = this.curMs;
+          this.dragMs = this.curMs;
+          this.dragging = true;
+          this.onBarDrag(0);
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          if (this.dragging) {
+            this.onBarDrag(e.offsetX);
+          }
+        })
+        .onActionEnd(() => {
+          if (this.dragging) {
+            this.endBarDrag();
+          }
+        }))
+
+      // 播放状态提示（非覆盖：显示在信息层上方）
+      if (this.playStateMsg !== '') {
+        Text(this.playStateMsg)
+          .fontSize(12)
+          .fontColor('#ffcccc')
+          .position({ x: '50%', y: '50%' })
+          .markAnchor({ x: '50%', y: '50%' })
+      }
 
       // 加载态
       if (!this.ready && this.errMsg === '') {
