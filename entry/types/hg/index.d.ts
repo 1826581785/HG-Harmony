@@ -16,3 +16,4 @@ export const hgMediaSelftest: () => Promise<string>;
 export const hgClearMediaCache: () => string;
 export const hgSetProxy: (addr: string) => string;
 export const hgGetProxy: () => string;
+export const hgImgUrl: (url: string) => string;

@@ -228,3 +228,12 @@ pub fn hg_set_proxy(addr: String) -> String {
 pub fn hg_get_proxy() -> String {
     api().session.proxy()
 }
+
+/// 封面代理地址（走 /img 解密通道；站点封面是 AES-128-CBC 密文）。
+#[napi]
+pub fn hg_img_url(url: String) -> String {
+    match crate::server::base_url() {
+        Some(b) => envelope(Ok(json!({ "url": format!("{}/img?u={}", b, crate::media::enc(&url)) }))),
+        None => envelope(Err("媒体服务未启动，请先调用 hg_media_start".into())),
+    }
+}
